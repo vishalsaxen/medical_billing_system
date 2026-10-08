@@ -1,2 +1,3 @@
-billing.db
-__pycache__/
+.firebase/
+*-debug.log
+node_modules/

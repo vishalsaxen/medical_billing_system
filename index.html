@@ -97,7 +97,7 @@
 <section id="login-screen">
   <form class="card" id="login-form">
     <h3>Super Admin Login</h3>
-    <input name="login_id" placeholder="Super Admin ID" autocomplete="username" required>
+    <input name="login_id" type="email" placeholder="Super Admin ID (email)" autocomplete="username" required>
     <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
     <button class="btn" type="submit">Login</button>
     <div id="login-error"></div>
@@ -230,16 +230,9 @@ function toast(msg, isError) {
   toast.timer = setTimeout(() => (t.style.display = "none"), 2500);
 }
 
-async function api(method, path, body) {
-  const res = await fetch("/api/" + path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && path !== "login") lock();
-  if (!res.ok) throw new Error(data.error || "Request failed");
-  return data;
+// All data goes through the Firebase layer in the module script at the bottom of the page.
+function api(method, path, body) {
+  return window.firebaseApi(method, path, body);
 }
 
 // ---------- tabs ----------
@@ -274,8 +267,8 @@ function options(list, placeholder, selected) {
 function renderMain() {
   $("#list-main").innerHTML = state.mains.length ? state.mains.map(m => `
     <tr><td>${esc(m.name)}</td>
-      <td class="num"><button class="link" onclick="editMain(${m.id})">Edit</button>
-      <button class="link danger" onclick="removeItem('main-categories', ${m.id}, 'its sub categories and products')">Delete</button></td></tr>`).join("")
+      <td class="num"><button class="link" onclick="editMain('${m.id}')">Edit</button>
+      <button class="link danger" onclick="removeItem('main-categories', '${m.id}', 'its sub categories and products')">Delete</button></td></tr>`).join("")
     : `<tr><td colspan="2" class="empty">No main categories yet</td></tr>`;
   const f = $("#form-sub");
   f.main_category_id.innerHTML = options(state.mains, "Select main category", f.main_category_id.value);
@@ -290,8 +283,8 @@ function editMain(id) {
 function renderSub() {
   $("#list-sub").innerHTML = state.subs.length ? state.subs.map(s => `
     <tr><td>${esc(s.main_category_name)}</td><td>${esc(s.name)}</td>
-      <td class="num"><button class="link" onclick="editSub(${s.id})">Edit</button>
-      <button class="link danger" onclick="removeItem('sub-categories', ${s.id}, 'its products')">Delete</button></td></tr>`).join("")
+      <td class="num"><button class="link" onclick="editSub('${s.id}')">Edit</button>
+      <button class="link danger" onclick="removeItem('sub-categories', '${s.id}', 'its products')">Delete</button></td></tr>`).join("")
     : `<tr><td colspan="3" class="empty">No sub categories yet</td></tr>`;
 }
 
@@ -314,8 +307,8 @@ function renderProducts() {
   $("#list-product").innerHTML = state.products.length ? state.products.map(p => `
     <tr><td>${esc(p.main_category_name)}</td><td>${esc(p.sub_category_name)}</td><td>${esc(p.name)}</td>
       <td>${esc(p.unit)}</td><td class="num">${money(p.selling_price)}</td>
-      <td class="num"><button class="link" onclick="editProduct(${p.id})">Edit</button>
-      <button class="link danger" onclick="removeItem('products', ${p.id})">Delete</button></td></tr>`).join("")
+      <td class="num"><button class="link" onclick="editProduct('${p.id}')">Edit</button>
+      <button class="link danger" onclick="removeItem('products', '${p.id}')">Delete</button></td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">No products yet</td></tr>`;
 }
 
@@ -376,7 +369,7 @@ function renderSaleItems() {
   $("#sale-items").innerHTML = list.length ? list.map(p => `
     <tr><td>${esc(p.main_category_name)}</td><td>${esc(p.sub_category_name)}</td><td>${esc(p.name)}</td>
       <td>${esc(p.unit)}</td><td class="num">${money(p.selling_price)}</td>
-      <td class="num"><button class="btn" onclick="addToBill(${p.id})">Add</button></td></tr>`).join("")
+      <td class="num"><button class="btn" onclick="addToBill('${p.id}')">Add</button></td></tr>`).join("")
     : `<tr><td colspan="6" class="empty">No items. Add products in the Main tab.</td></tr>`;
 }
 
@@ -433,7 +426,7 @@ async function loadSales() {
     $("#sales-list").innerHTML = sales.length ? sales.map(s => `
       <tr><td>${esc(s.bill_no)}</td><td>${esc(s.bill_date)}</td><td>${esc(s.customer_name)}</td>
         <td>${esc(s.customer_phone)}</td><td class="num">${money(s.total)}</td>
-        <td class="num"><button class="link" onclick="printBill(${s.id})">Print</button></td></tr>`).join("")
+        <td class="num"><button class="link" onclick="printBill('${s.id}')">Print</button></td></tr>`).join("")
       : `<tr><td colspan="6" class="empty">No bills yet</td></tr>`;
   } catch (e) { /* toast already shown by loadAll */ }
 }
@@ -474,19 +467,275 @@ $("#login-form").addEventListener("submit", async e => {
   const f = e.target;
   $("#login-error").textContent = "";
   try {
-    await api("POST", "login", { login_id: f.login_id.value, password: f.password.value });
-    f.reset();
-    unlock();
+    await window.firebaseLogin(f.login_id.value.trim(), f.password.value);
+    f.reset();  // the auth listener in the module script unlocks the page
   } catch (err) { $("#login-error").textContent = err.message; f.password.value = ""; }
 });
 
-$("#logout").addEventListener("click", async () => {
-  await api("POST", "logout").catch(() => {});
-  lock();
-});
+$("#logout").addEventListener("click", () => window.firebaseLogout());
+</script>
 
-api("GET", "session").then(s => s.logged_in ? unlock() : lock()).catch(() => {
-  $("#login-error").textContent = "Cannot reach the server. Start it with: python server.py";
+<!-- ================= FIREBASE DATA LAYER ================= -->
+<script type="module">
+// Firebase project settings. Copy them from Firebase console > Project settings > Your apps > Web app (SDK setup and configuration).
+const firebaseConfig = {
+  apiKey: "PASTE_API_KEY",
+  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
+  projectId: "PASTE_PROJECT_ID",
+  storageBucket: "PASTE_PROJECT_ID.appspot.com",
+  messagingSenderId: "PASTE_SENDER_ID",
+  appId: "PASTE_APP_ID",
+};
+// Firestore database to use: "(default)" unless you created a named database in Firestore.
+const FIRESTORE_DATABASE = "(default)";
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc,
+  query, where, orderBy, limit, writeBatch, runTransaction,
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app, FIRESTORE_DATABASE);
+if (new URLSearchParams(location.search).has("emulator")) {  // local testing only
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+  connectFirestoreEmulator(db, "127.0.0.1", 8080);
+}
+
+// Starting Main Categories and their Sub Categories, added once when the database is empty.
+const SEED_CATEGORIES = {
+  "Surgical Instruments": ["Scissors", "Forceps", "Retractors", "Needle Holders", "Scalpels & Handles", "Clamps", "Surgical Knives", "Speculums"],
+  "Surgical Disposables": ["Surgical Gloves", "Masks", "Caps", "Gowns", "Shoe Covers", "Drapes", "Disposable Sheets"],
+  "Wound Care": ["Gauze", "Cotton", "Bandages", "Adhesive Dressings", "Wound Dressings", "Surgical Tape"],
+  "Syringes & Needles": ["Disposable Syringes", "Insulin Syringes", "Hypodermic Needles", "IV Cannulas", "Safety Needles"],
+  "Infusion & IV Products": ["IV Sets", "Extension Sets", "Three-Way Stopcocks", "Blood Transfusion Sets", "Infusion Accessories"],
+  "Sutures & Stapling": ["Absorbable Sutures", "Non-Absorbable Sutures", "Skin Staples", "Surgical Staplers", "Suture Needles"],
+  "Medical Tubes & Catheters": ["Urinary Catheters", "Feeding Tubes", "Suction Catheters", "Drainage Tubes", "Endotracheal Tubes"],
+  "Surgical & Examination Gloves": ["Latex Gloves", "Nitrile Gloves", "Vinyl Gloves", "Sterile Surgical Gloves"],
+  "Sterilization Products": ["Sterilization Pouches", "Sterilization Rolls", "Autoclave Accessories", "Chemical Indicators"],
+  "Operating Room Supplies": ["Surgical Drapes", "Instrument Trays", "Kidney Trays", "Bowls", "Surgical Basins"],
+  "Diagnostic & Procedure Supplies": ["Examination Supplies", "Procedure Kits", "Specimen Containers", "Disposable Accessories"],
+  "Orthopedic Surgical Supplies": ["Plaster Bandages", "Crepe Bandages", "Splints", "Orthopedic Supports", "Cast Accessories"],
+  "Dental Surgical Supplies": ["Dental Extraction Instruments", "Dental Sutures", "Dental Surgical Kits", "Dental Forceps"],
+  "Emergency & Trauma Supplies": ["First-Aid Kits", "Trauma Dressings", "Emergency Bandages", "Tourniquets", "Splints"],
+  "Post-Surgical Care": ["Compression Bandages", "Wound Care Kits", "Dressing Kits", "Post-Operative Supports"],
+};
+
+const MAIN = "mainCategories", SUB = "subCategories", PRODUCTS = "products", SALES = "sales";
+
+const all = async name => (await getDocs(collection(db, name))).docs.map(d => ({ id: d.id, ...d.data() }));
+const byName = (a, b) => a.name.localeCompare(b.name);
+const text = (v, label) => {
+  const t = String(v ?? "").trim();
+  if (!t) throw new Error(label + " is required");
+  return t;
+};
+const number = (v, label, min = 0) => {
+  const n = Number(v);
+  if (v === "" || v === null || v === undefined || Number.isNaN(n) || n < min) throw new Error(label + " must be a number of at least " + min);
+  return n;
+};
+async function assertUnique(name, field, value, scope, id) {
+  const clauses = [where("nameKey", "==", value.toLowerCase())];
+  if (scope) clauses.push(where(scope[0], "==", scope[1]));
+  const hit = (await getDocs(query(collection(db, name), ...clauses))).docs.find(d => d.id !== id);
+  if (hit) throw new Error("That name already exists");
+}
+
+async function seedIfEmpty() {
+  if (!(await getDocs(query(collection(db, MAIN), limit(1)))).empty) return;
+  const batch = writeBatch(db);
+  for (const [mainName, subs] of Object.entries(SEED_CATEGORIES)) {
+    const mainRef = doc(collection(db, MAIN));
+    batch.set(mainRef, { name: mainName, nameKey: mainName.toLowerCase() });
+    for (const sub of subs) {
+      batch.set(doc(collection(db, SUB)), { mainCategoryId: mainRef.id, name: sub, nameKey: sub.toLowerCase() });
+    }
+  }
+  await batch.commit();
+}
+
+// Deletes in chunks below Firestore's 500-writes-per-batch limit.
+async function deleteRefs(refs) {
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = writeBatch(db);
+    refs.slice(i, i + 400).forEach(r => batch.delete(r));
+    await batch.commit();
+  }
+}
+
+// Same calls the page used with the old server: api(method, path, body).
+const routes = {
+  async "GET main-categories"() {
+    return (await all(MAIN)).sort(byName);
+  },
+  async "POST main-categories"(_id, b) {
+    const name = text(b.name, "Main category");
+    await assertUnique(MAIN, "name", name);
+    return { id: (await addDoc(collection(db, MAIN), { name, nameKey: name.toLowerCase() })).id };
+  },
+  async "PUT main-categories"(id, b) {
+    const name = text(b.name, "Main category");
+    await assertUnique(MAIN, "name", name, null, id);
+    await updateDoc(doc(db, MAIN, id), { name, nameKey: name.toLowerCase() });
+    return { id };
+  },
+  async "DELETE main-categories"(id) {
+    const subs = await getDocs(query(collection(db, SUB), where("mainCategoryId", "==", id)));
+    const refs = [doc(db, MAIN, id)];
+    for (const s of subs.docs) {
+      refs.push(s.ref, ...(await getDocs(query(collection(db, PRODUCTS), where("subCategoryId", "==", s.id)))).docs.map(d => d.ref));
+    }
+    await deleteRefs(refs);
+    return { deleted: id };
+  },
+
+  async "GET sub-categories"() {
+    const mains = Object.fromEntries((await all(MAIN)).map(m => [m.id, m.name]));
+    return (await all(SUB))
+      .map(s => ({ id: s.id, name: s.name, main_category_id: s.mainCategoryId, main_category_name: mains[s.mainCategoryId] || "?" }))
+      .sort((a, b) => a.main_category_name.localeCompare(b.main_category_name) || byName(a, b));
+  },
+  async "POST sub-categories"(_id, b) {
+    const name = text(b.name, "Sub category"), mainCategoryId = text(b.main_category_id, "Main category");
+    await assertUnique(SUB, "name", name, ["mainCategoryId", mainCategoryId]);
+    return { id: (await addDoc(collection(db, SUB), { mainCategoryId, name, nameKey: name.toLowerCase() })).id };
+  },
+  async "PUT sub-categories"(id, b) {
+    const name = text(b.name, "Sub category"), mainCategoryId = text(b.main_category_id, "Main category");
+    await assertUnique(SUB, "name", name, ["mainCategoryId", mainCategoryId], id);
+    await updateDoc(doc(db, SUB, id), { mainCategoryId, name, nameKey: name.toLowerCase() });
+    return { id };
+  },
+  async "DELETE sub-categories"(id) {
+    const products = await getDocs(query(collection(db, PRODUCTS), where("subCategoryId", "==", id)));
+    await deleteRefs([doc(db, SUB, id), ...products.docs.map(d => d.ref)]);
+    return { deleted: id };
+  },
+
+  async "GET products"() {
+    const [mains, subs, products] = await Promise.all([all(MAIN), all(SUB), all(PRODUCTS)]);
+    const mainName = Object.fromEntries(mains.map(m => [m.id, m.name]));
+    const subById = Object.fromEntries(subs.map(s => [s.id, s]));
+    return products.map(p => {
+      const sub = subById[p.subCategoryId] || {};
+      return {
+        id: p.id, name: p.name, unit: p.unit, selling_price: p.sellingPrice,
+        sub_category_id: p.subCategoryId, sub_category_name: sub.name || "?",
+        main_category_id: sub.mainCategoryId, main_category_name: mainName[sub.mainCategoryId] || "?",
+      };
+    }).sort((a, b) => a.main_category_name.localeCompare(b.main_category_name)
+      || a.sub_category_name.localeCompare(b.sub_category_name) || byName(a, b));
+  },
+  async "POST products"(_id, b) {
+    const data = productData(b);
+    await assertUnique(PRODUCTS, "name", data.name, ["subCategoryId", data.subCategoryId]);
+    return { id: (await addDoc(collection(db, PRODUCTS), data)).id };
+  },
+  async "PUT products"(id, b) {
+    const data = productData(b);
+    await assertUnique(PRODUCTS, "name", data.name, ["subCategoryId", data.subCategoryId], id);
+    await updateDoc(doc(db, PRODUCTS, id), data);
+    return { id };
+  },
+  async "DELETE products"(id) {
+    await deleteRefs([doc(db, PRODUCTS, id)]);
+    return { deleted: id };
+  },
+
+  async "GET sales"(id) {
+    if (id) {
+      const snap = await getDoc(doc(db, SALES, id));
+      if (!snap.exists()) throw new Error("Bill not found");
+      return { id, ...snap.data() };
+    }
+    return (await getDocs(query(collection(db, SALES), orderBy("number", "desc"), limit(100))))
+      .docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async "POST sales"(_id, b) {
+    if (!b.items || !b.items.length) throw new Error("Add at least one item to the bill");
+    const products = Object.fromEntries((await all(PRODUCTS)).map(p => [p.id, p]));
+    const items = b.items.map(it => {
+      const p = products[it.product_id];
+      if (!p) throw new Error("One of the items no longer exists");
+      const qty = number(it.qty, "Quantity", 0.001), price = number(it.price ?? p.sellingPrice, "Rate");
+      return { product_id: p.id, name: p.name, unit: p.unit, qty, price, amount: Math.round(qty * price * 100) / 100 };
+    });
+    const total = Math.round(items.reduce((s, it) => s + it.amount, 0) * 100) / 100;
+    const now = new Date(), pad = n => String(n).padStart(2, "0");
+    const billDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    // A counter document hands out bill numbers MS-00001, MS-00002, ... without gaps or repeats.
+    return runTransaction(db, async tx => {
+      const counterRef = doc(db, "counters", "sales");
+      const counter = await tx.get(counterRef);
+      const number = (counter.exists() ? counter.data().last : 0) + 1;
+      const saleRef = doc(collection(db, SALES));
+      const bill_no = "MS-" + String(number).padStart(5, "0");
+      tx.set(counterRef, { last: number });
+      tx.set(saleRef, {
+        number, bill_no, bill_date: billDate, created_at: now,
+        customer_name: String(b.customer_name || "").trim(), customer_phone: String(b.customer_phone || "").trim(),
+        items, total,
+      });
+      return { id: saleRef.id, bill_no, total };
+    });
+  },
+};
+
+function productData(b) {
+  const name = text(b.name, "Product name");
+  return {
+    subCategoryId: text(b.sub_category_id, "Sub category"), name, nameKey: name.toLowerCase(),
+    unit: String(b.unit || "").trim() || "Nos", sellingPrice: number(b.selling_price, "Selling price"),
+  };
+}
+
+const friendly = err => {
+  if (err.code === "permission-denied") return "This login is not the Super Admin.";
+  if (err.code === "unavailable") return "Cannot reach the database. Check the internet connection.";
+  return err.message;
+};
+
+window.firebaseApi = async (method, path, body = {}) => {
+  const [resource, id] = path.split("/");
+  const handler = routes[`${method} ${resource}`];
+  if (!handler) throw new Error("Unknown request");
+  try {
+    return await handler(id, body);
+  } catch (err) {
+    if (err.code === "permission-denied" || err.code === "unauthenticated") lock();
+    throw new Error(friendly(err));
+  }
+};
+
+window.firebaseLogin = async (email, password) => {
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (err) {
+    if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-email"].includes(err.code)) {
+      throw new Error("Wrong ID or password");
+    }
+    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again in a few minutes.");
+    throw new Error(friendly(err));
+  }
+};
+
+window.firebaseLogout = () => signOut(auth);
+
+onAuthStateChanged(auth, async user => {
+  if (!user) return lock();
+  try {
+    await seedIfEmpty();
+    unlock();
+  } catch (err) {
+    // Signed in but not allowed by the Firestore rules: not the Super Admin.
+    await signOut(auth);
+    $("#login-error").textContent = friendly(err);
+  }
 });
 </script>
 </body>

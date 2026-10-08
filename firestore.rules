@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// Only the Super Admin may read or write anything.
+// Replace the email below with the Super Admin's login email (the one created in
+// Firebase console > Authentication > Users), then publish these rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSuperAdmin() {
+      return request.auth != null
+        && request.auth.token.email == "superadmin@matoshree.example";
+    }
+
+    match /{document=**} {
+      allow read, write: if isSuperAdmin();
+    }
+  }
+}
