@@ -21,9 +21,10 @@ There is no server to run.
 3. **Super Admin login (mobile OTP)** – Build › Authentication › *Get started* › *Sign-in method* › enable
    **Phone**. Firebase only sends real SMS on the **Blaze (pay-as-you-go)** plan. Make sure the address you open
    the app from (for example `<project-id>.web.app`, or `localhost`) is listed under Authentication › Settings ›
-   *Authorized domains*. Only mobile **9665121212** can log in: the page refuses to send an OTP to any other
-   number, and the security rules refuse every other login.
-   To change the number, edit `SUPER_ADMIN_PHONE` in `index.html` and the number in `firestore.rules`.
+   *Authorized domains*.
+   The first login must be the starting number **9284524383**. After that, use **Change login number** in the
+   header: enter the new number and the OTP sent to it, and from then on only the new number can log in.
+   The page refuses to send an OTP to any other number, and the security rules refuse every other login.
 4. **Security rules** – publish `firestore.rules` (paste it into Firestore › Rules, or run
    `firebase deploy --only firestore:rules`).
 
@@ -46,3 +47,4 @@ Firebase login does not work from a `file://` page, so open it over http:
 | `products`       | `subCategoryId`, `name`, `nameKey`, `unit`, `sellingPrice` |
 | `sales`          | `number`, `bill_no`, `bill_date`, `customer_name`, `customer_phone`, `items[]`, `total` |
 | `counters/sales` | `last` (last bill number used) |
+| `settings/admin` | `uid`, `phoneHash` (SHA-256 of the login number) |

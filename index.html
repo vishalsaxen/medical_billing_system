@@ -42,11 +42,18 @@
   button.btn:hover { background: var(--brand-dark); }
   button.btn.secondary { background: #f3e6dc; color: var(--text); }
   header.shop { position: relative; }
-  #logout { position: absolute; top: 12px; right: 16px; background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.5); }
-  #logout:hover { background: rgba(255,255,255,.3); }
+  .header-actions { position: absolute; top: 12px; right: 16px; display: flex; gap: 6px; }
+  .header-actions .btn { background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.5); }
+  .header-actions .btn:hover { background: rgba(255,255,255,.3); }
+  @media (max-width: 700px) { .header-actions { position: static; justify-content: center; margin-top: 8px; } }
+  dialog { border: 1px solid var(--border); border-radius: 8px; padding: 0; width: min(360px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog form { display: grid; gap: 10px; }
+  dialog p { margin: 0; font-size: 13px; color: var(--muted); }
+  #change-error { color: var(--danger); min-height: 1.2em; font-size: 14px; }
   #login-screen { display: none; justify-content: center; padding: 48px 16px; }
   body.locked #login-screen { display: flex; }
-  body.locked nav.tabs, body.locked main, body.locked #logout { display: none; }
+  body.locked nav.tabs, body.locked main, body.locked .header-actions { display: none; }
   #login-screen form { width: 100%; max-width: 340px; display: grid; gap: 10px; }
   #login-screen h3 { text-align: center; }
   #login-error { color: var(--danger); min-height: 1.2em; font-size: 14px; text-align: center; }
@@ -91,7 +98,10 @@
   <h2>Surgical &amp; Distributor</h2>
   <p>1344, Sadashiv Peth, Bharat Natya Mandir Road, Near Chimnya Ganapati, Opp. Godbole Hospital, Pune - 411030</p>
   <p>GST No. 27ACIFM1626L1ZZ &nbsp;|&nbsp; Mobile: 9665 12 12 12 / 8669 56 42 42</p>
-  <button class="btn" id="logout" type="button">Logout</button>
+  <div class="header-actions">
+    <button class="btn" id="change-number" type="button">Change login number</button>
+    <button class="btn" id="logout" type="button">Logout</button>
+  </div>
 </header>
 
 <section id="login-screen">
@@ -102,7 +112,6 @@
     <button class="btn" type="submit" id="login-button">Send OTP</button>
     <button class="link" type="button" id="login-change" hidden>Change number / resend OTP</button>
     <div id="login-error"></div>
-    <div id="recaptcha"></div>
   </form>
 </section>
 
@@ -214,6 +223,21 @@
   </section>
 </main>
 
+<dialog id="change-dialog">
+  <form class="card" id="change-form">
+    <h3>Change login number</h3>
+    <p>Enter the new mobile number. After you enter the OTP sent to it, only the new number can log in.</p>
+    <input name="mobile" type="tel" inputmode="numeric" placeholder="New mobile number" maxlength="14" required>
+    <input name="otp" type="text" inputmode="numeric" placeholder="OTP sent to the new number" autocomplete="one-time-code" maxlength="6" hidden>
+    <div id="change-error"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn secondary" type="button" id="change-cancel">Cancel</button>
+      <button class="btn" type="submit" id="change-button">Send OTP</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="recaptcha"></div>
 <div id="print-area"></div>
 <div id="toast"></div>
 
@@ -503,6 +527,47 @@ $("#login-form").addEventListener("submit", async e => {
 $("#login-change").addEventListener("click", resetLoginForm);
 
 $("#logout").addEventListener("click", () => window.firebaseLogout());
+
+// ---------- change login number ----------
+function resetChangeForm() {
+  const f = $("#change-form");
+  f.reset();
+  f.mobile.disabled = false;
+  f.otp.hidden = true; f.otp.required = false;
+  $("#change-button").textContent = "Send OTP";
+  $("#change-error").textContent = "";
+}
+
+$("#change-number").addEventListener("click", () => {
+  resetChangeForm();
+  $("#change-dialog").showModal();
+  $("#change-form").mobile.focus();
+});
+$("#change-cancel").addEventListener("click", () => $("#change-dialog").close());
+
+$("#change-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target, button = $("#change-button");
+  $("#change-error").textContent = "";
+  button.disabled = true;
+  try {
+    if (f.otp.hidden) {
+      await window.firebaseSendChangeOtp(f.mobile.value);
+      f.mobile.disabled = true;
+      f.otp.hidden = false; f.otp.required = true; f.otp.focus();
+      button.textContent = "Change number";
+    } else {
+      const phone = await window.firebaseConfirmChange(f.otp.value.trim());
+      $("#change-dialog").close();
+      toast("Login number changed to " + phone);
+    }
+  } catch (err) {
+    $("#change-error").textContent = err.message;
+    f.otp.value = "";
+  } finally {
+    button.disabled = false;
+  }
+});
 </script>
 
 <!-- ================= FIREBASE DATA LAYER ================= -->
@@ -518,15 +583,17 @@ const firebaseConfig = {
 };
 // Firestore database to use: "(default)" unless you created a named database in Firestore.
 const FIRESTORE_DATABASE = "(default)";
-// The only mobile number that can log in (OTP by SMS). Keep it the same as in firestore.rules.
-const SUPER_ADMIN_PHONE = "+919665121212";
+// Starting login number, used only until the first login saves it in the database.
+// After that, change it from the page ("Change login number"). Keep it the same as in firestore.rules.
+const INITIAL_SUPER_ADMIN_PHONE = "+919284524383";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth, connectAuthEmulator, onAuthStateChanged, signInWithPhoneNumber, RecaptchaVerifier, signOut,
+  PhoneAuthProvider, updatePhoneNumber,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc,
+  getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc, setDoc,
   query, where, orderBy, limit, writeBatch, runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -750,23 +817,89 @@ const toIndianE164 = value => {
   return digits.length === 10 ? "+91" + digits : null;
 };
 
-let recaptcha = null, pendingOtp = null;
+const sha256 = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))]
+  .map(b => b.toString(16).padStart(2, "0")).join("");
+const ADMIN_REF = doc(db, "settings", "admin");  // { uid, phoneHash } of the Super Admin login
+
+let recaptcha = null, pendingOtp = null, pendingChange = null;
+
+// A fresh invisible reCAPTCHA for every OTP request (Firebase requires one before sending an SMS).
+const verifier = () => {
+  recaptcha?.clear();
+  const box = document.createElement("div");
+  $("#recaptcha").replaceChildren(box);
+  return (recaptcha = new RecaptchaVerifier(auth, box, { size: "invisible" }));
+};
+const otpError = err => {
+  recaptcha?.clear(); recaptcha = null;
+  if (err.code === "auth/too-many-requests") return new Error("Too many attempts. Try again later.");
+  if (err.code === "auth/invalid-phone-number") return new Error("Enter a 10-digit mobile number");
+  return new Error("Could not send the OTP: " + friendly(err));
+};
+
+async function isLoginNumber(phone) {
+  const admin = await getDoc(ADMIN_REF);
+  return admin.exists() ? admin.data().phoneHash === await sha256(phone) : phone === INITIAL_SUPER_ADMIN_PHONE;
+}
 
 window.firebaseSendOtp = async mobile => {
   const phone = toIndianE164(mobile);
   if (!phone) throw new Error("Enter a 10-digit mobile number");
   // Only the Super Admin number may log in, so don't spend an SMS on any other number.
-  if (phone !== SUPER_ADMIN_PHONE) throw new Error("This mobile number is not the Super Admin.");
+  if (!(await isLoginNumber(phone))) throw new Error("This mobile number is not the Super Admin.");
   try {
-    recaptcha ??= new RecaptchaVerifier(auth, "recaptcha", { size: "invisible" });
-    pendingOtp = await signInWithPhoneNumber(auth, phone, recaptcha);
+    pendingOtp = await signInWithPhoneNumber(auth, phone, verifier());
   } catch (err) {
-    recaptcha?.clear(); recaptcha = null;
-    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again later.");
-    if (err.code === "auth/invalid-phone-number") throw new Error("Enter a 10-digit mobile number");
-    throw new Error("Could not send the OTP: " + friendly(err));
+    throw otpError(err);
   }
 };
+
+window.firebaseSendChangeOtp = async mobile => {
+  const phone = toIndianE164(mobile);
+  if (!phone) throw new Error("Enter a 10-digit mobile number");
+  if (phone === auth.currentUser?.phoneNumber) throw new Error("That is already the login number.");
+  try {
+    pendingChange = { phone, verificationId: await new PhoneAuthProvider(auth).verifyPhoneNumber(phone, verifier()) };
+  } catch (err) {
+    throw otpError(err);
+  }
+};
+
+window.firebaseConfirmChange = async code => {
+  if (!pendingChange) throw new Error("Send the OTP first");
+  if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit OTP");
+  const user = auth.currentUser;
+  try {
+    await updatePhoneNumber(user, PhoneAuthProvider.credential(pendingChange.verificationId, code));
+  } catch (err) {
+    if (err.code === "auth/invalid-verification-code") throw new Error("Wrong OTP. Check the SMS and try again.");
+    if (err.code === "auth/code-expired") throw new Error("The OTP has expired. Send a new one.");
+    if (err.code === "auth/credential-already-in-use" || err.code === "auth/account-exists-with-different-credential") {
+      throw new Error("That number is already used by another login.");
+    }
+    if (err.code === "auth/requires-recent-login") throw new Error("Please log out and log in again, then change the number.");
+    throw new Error(friendly(err));
+  }
+  await user.getIdToken(true);  // the new token carries the new number, which the rules check
+  await saveAdmin(user);
+  const phone = pendingChange.phone;
+  pendingChange = null;
+  return phone;
+};
+
+// Records (or refreshes) this login as the Super Admin. The rules only allow the first login with the
+// starting number, or the same login after it verified a new number.
+async function saveAdmin(user) {
+  await setDoc(ADMIN_REF, { uid: user.uid, phoneHash: await sha256(user.phoneNumber) });
+}
+
+async function ensureAdmin(user) {
+  const admin = await getDoc(ADMIN_REF);
+  const hash = await sha256(user.phoneNumber || "");
+  if (!admin.exists() || (admin.data().uid === user.uid && admin.data().phoneHash !== hash)) {
+    await saveAdmin(user);  // first login, or finishing a number change that was interrupted
+  }
+}
 
 window.firebaseVerifyOtp = async code => {
   if (!pendingOtp) throw new Error("Send the OTP first");
@@ -786,6 +919,7 @@ window.firebaseLogout = () => signOut(auth);
 onAuthStateChanged(auth, async user => {
   if (!user) return lock();
   try {
+    await ensureAdmin(user);
     await seedIfEmpty();
     unlock();
   } catch (err) {
