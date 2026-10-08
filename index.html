@@ -6,14 +6,14 @@
 <title>MATOSHREE Billing</title>
 <style>
   :root {
-    --brand: #0b6e6e;
-    --brand-dark: #084f4f;
-    --accent: #e8f4f4;
-    --border: #d5dddd;
-    --text: #1d2a2a;
-    --muted: #5f6f6f;
+    --brand: #e8590c;
+    --brand-dark: #b8460a;
+    --accent: #fff1e6;
+    --border: #ecd9cc;
+    --text: #2b1d14;
+    --muted: #7a6458;
     --danger: #b3261e;
-    --bg: #f5f7f7;
+    --bg: #fdf8f4;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: "Segoe UI", Roboto, Arial, sans-serif; color: var(--text); background: var(--bg); }
@@ -25,7 +25,7 @@
   header.shop p { margin: 2px 0; font-size: 13px; opacity: .95; }
   nav.tabs { display: flex; gap: 4px; background: var(--brand-dark); padding: 6px 16px 0; overflow-x: auto; }
   nav.tabs button {
-    border: 0; background: transparent; color: #cfe7e7; padding: 10px 18px; font-size: 15px;
+    border: 0; background: transparent; color: #ffe3cf; padding: 10px 18px; font-size: 15px;
     border-radius: 6px 6px 0 0; cursor: pointer; white-space: nowrap;
   }
   nav.tabs button.active { background: var(--bg); color: var(--brand-dark); font-weight: 600; }
@@ -40,7 +40,16 @@
   input, select { padding: 8px; border: 1px solid var(--border); border-radius: 5px; font-size: 14px; width: 100%; }
   button.btn { padding: 8px 14px; border: 0; border-radius: 5px; background: var(--brand); color: #fff; cursor: pointer; font-size: 14px; }
   button.btn:hover { background: var(--brand-dark); }
-  button.btn.secondary { background: #e3e9e9; color: var(--text); }
+  button.btn.secondary { background: #f3e6dc; color: var(--text); }
+  header.shop { position: relative; }
+  #logout { position: absolute; top: 12px; right: 16px; background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.5); }
+  #logout:hover { background: rgba(255,255,255,.3); }
+  #login-screen { display: none; justify-content: center; padding: 48px 16px; }
+  body.locked #login-screen { display: flex; }
+  body.locked nav.tabs, body.locked main, body.locked #logout { display: none; }
+  #login-screen form { width: 100%; max-width: 340px; display: grid; gap: 10px; }
+  #login-screen h3 { text-align: center; }
+  #login-error { color: var(--danger); min-height: 1.2em; font-size: 14px; text-align: center; }
   button.link { border: 0; background: none; color: var(--brand); cursor: pointer; padding: 2px 4px; font-size: 13px; }
   button.link.danger { color: var(--danger); }
   .table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
@@ -55,7 +64,7 @@
   .qty { width: 70px; }
   .price-input { width: 90px; }
   #toast {
-    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #233; color: #fff;
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #3a2516; color: #fff;
     padding: 10px 18px; border-radius: 6px; display: none; z-index: 10; max-width: 90vw;
   }
   #toast.error { background: var(--danger); }
@@ -65,7 +74,7 @@
   #print-area { display: none; }
   @media print {
     body { background: #fff; }
-    header.shop, nav.tabs, main, #toast { display: none !important; }
+    header.shop, nav.tabs, main, #toast, #login-screen { display: none !important; }
     #print-area { display: block; padding: 10px; font-size: 13px; }
     #print-area .head { text-align: center; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
     #print-area .head h1 { margin: 0; font-size: 22px; letter-spacing: 2px; }
@@ -75,14 +84,25 @@
   }
 </style>
 </head>
-<body>
+<body class="locked">
 
 <header class="shop">
   <h1>MATOSHREE</h1>
   <h2>Surgical &amp; Distributor</h2>
   <p>1344, Sadashiv Peth, Bharat Natya Mandir Road, Near Chimnya Ganapati, Opp. Godbole Hospital, Pune - 411030</p>
   <p>GST No. 27ACIFM1626L1ZZ &nbsp;|&nbsp; Mobile: 9665 12 12 12 / 8669 56 42 42</p>
+  <button class="btn" id="logout" type="button">Logout</button>
 </header>
+
+<section id="login-screen">
+  <form class="card" id="login-form">
+    <h3>Super Admin Login</h3>
+    <input name="login_id" placeholder="Super Admin ID" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="btn" type="submit">Login</button>
+    <div id="login-error"></div>
+  </form>
+</section>
 
 <nav class="tabs">
   <button data-tab="tab-main" class="active">Main</button>
@@ -217,6 +237,7 @@ async function api(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== "login") lock();
   if (!res.ok) throw new Error(data.error || "Request failed");
   return data;
 }
@@ -234,7 +255,7 @@ async function loadAll() {
       api("GET", "main-categories"), api("GET", "sub-categories"), api("GET", "products"),
     ]);
   } catch (e) {
-    toast("Cannot reach the database. Start it with: python server.py", true);
+    if (!document.body.classList.contains("locked")) toast(e.message, true);
     return;
   }
   renderMain();
@@ -434,9 +455,39 @@ async function printBill(id) {
   window.print();
 }
 
-loadAll();
-loadSales();
-renderBill();
+// ---------- login ----------
+function lock() {
+  document.body.classList.add("locked");
+  state.mains = state.subs = state.products = state.bill = [];
+  $("#login-form").login_id.focus();
+}
+
+function unlock() {
+  document.body.classList.remove("locked");
+  loadAll();
+  loadSales();
+  renderBill();
+}
+
+$("#login-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  $("#login-error").textContent = "";
+  try {
+    await api("POST", "login", { login_id: f.login_id.value, password: f.password.value });
+    f.reset();
+    unlock();
+  } catch (err) { $("#login-error").textContent = err.message; f.password.value = ""; }
+});
+
+$("#logout").addEventListener("click", async () => {
+  await api("POST", "logout").catch(() => {});
+  lock();
+});
+
+api("GET", "session").then(s => s.logged_in ? unlock() : lock()).catch(() => {
+  $("#login-error").textContent = "Cannot reach the server. Start it with: python server.py";
+});
 </script>
 </body>
 </html>

@@ -4,19 +4,39 @@ Serves index.html and a small JSON API backed by SQLite.
 Uses only the Python standard library, so there is nothing to install:
 
     python server.py            # then open http://localhost:8000
+    python server.py --set-admin   # create or change the Super Admin ID/password
+
+Only the Super Admin can log in. On first start the server asks for the
+Super Admin ID and password in the terminal (or reads SUPERADMIN_ID and
+SUPERADMIN_PASSWORD from the environment).
 """
+import getpass
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
+import sys
+import threading
+import time
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("BILLING_DB", os.path.join(BASE_DIR, "billing.db"))
 PORT = int(os.environ.get("PORT", "8000"))
+SESSION_HOURS = 12
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS admin (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    login_id       TEXT NOT NULL,
+    password_salt  TEXT NOT NULL,
+    password_hash  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS main_categories (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,
     name  TEXT NOT NULL UNIQUE COLLATE NOCASE
@@ -55,6 +75,25 @@ CREATE TABLE IF NOT EXISTS sale_items (
 );
 """
 
+# Starting Main Categories and their Sub Categories (added once, on first run).
+SEED_CATEGORIES = {
+    "Surgical Instruments": ["Scissors", "Forceps", "Retractors", "Needle Holders", "Scalpels & Handles", "Clamps", "Surgical Knives", "Speculums"],
+    "Surgical Disposables": ["Surgical Gloves", "Masks", "Caps", "Gowns", "Shoe Covers", "Drapes", "Disposable Sheets"],
+    "Wound Care": ["Gauze", "Cotton", "Bandages", "Adhesive Dressings", "Wound Dressings", "Surgical Tape"],
+    "Syringes & Needles": ["Disposable Syringes", "Insulin Syringes", "Hypodermic Needles", "IV Cannulas", "Safety Needles"],
+    "Infusion & IV Products": ["IV Sets", "Extension Sets", "Three-Way Stopcocks", "Blood Transfusion Sets", "Infusion Accessories"],
+    "Sutures & Stapling": ["Absorbable Sutures", "Non-Absorbable Sutures", "Skin Staples", "Surgical Staplers", "Suture Needles"],
+    "Medical Tubes & Catheters": ["Urinary Catheters", "Feeding Tubes", "Suction Catheters", "Drainage Tubes", "Endotracheal Tubes"],
+    "Surgical & Examination Gloves": ["Latex Gloves", "Nitrile Gloves", "Vinyl Gloves", "Sterile Surgical Gloves"],
+    "Sterilization Products": ["Sterilization Pouches", "Sterilization Rolls", "Autoclave Accessories", "Chemical Indicators"],
+    "Operating Room Supplies": ["Surgical Drapes", "Instrument Trays", "Kidney Trays", "Bowls", "Surgical Basins"],
+    "Diagnostic & Procedure Supplies": ["Examination Supplies", "Procedure Kits", "Specimen Containers", "Disposable Accessories"],
+    "Orthopedic Surgical Supplies": ["Plaster Bandages", "Crepe Bandages", "Splints", "Orthopedic Supports", "Cast Accessories"],
+    "Dental Surgical Supplies": ["Dental Extraction Instruments", "Dental Sutures", "Dental Surgical Kits", "Dental Forceps"],
+    "Emergency & Trauma Supplies": ["First-Aid Kits", "Trauma Dressings", "Emergency Bandages", "Tourniquets", "Splints"],
+    "Post-Surgical Care": ["Compression Bandages", "Wound Care Kits", "Dressing Kits", "Post-Operative Supports"],
+}
+
 
 def connect():
     conn = sqlite3.connect(DB_PATH)
@@ -64,8 +103,108 @@ def connect():
 
 
 def init_db():
-    with connect() as conn:
-        conn.executescript(SCHEMA)
+    conn = connect()
+    try:
+        with conn:
+            conn.executescript(SCHEMA)
+            seeded = conn.execute("SELECT COUNT(*) FROM main_categories").fetchone()[0]
+            if not seeded:
+                for main_name, subs in SEED_CATEGORIES.items():
+                    main_id = conn.execute("INSERT INTO main_categories (name) VALUES (?)", (main_name,)).lastrowid
+                    conn.executemany(
+                        "INSERT INTO sub_categories (main_category_id, name) VALUES (?, ?)",
+                        [(main_id, sub) for sub in subs])
+    finally:
+        conn.close()
+
+
+# ---------- Super Admin login ----------
+
+def hash_password(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt), 200_000).hex()
+
+
+def get_admin():
+    conn = connect()
+    try:
+        return conn.execute("SELECT * FROM admin WHERE id = 1").fetchone()
+    finally:
+        conn.close()
+
+
+def set_admin(login_id, password):
+    salt = secrets.token_hex(16)
+    conn = connect()
+    try:
+        with conn:
+            conn.execute(
+                """INSERT INTO admin (id, login_id, password_salt, password_hash) VALUES (1, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET login_id = excluded.login_id,
+                       password_salt = excluded.password_salt, password_hash = excluded.password_hash""",
+                (login_id, salt, hash_password(password, salt)))
+    finally:
+        conn.close()
+
+
+def prompt_admin():
+    print("Set the Super Admin login for MATOSHREE billing.")
+    login_id = input("Super Admin ID: ").strip()
+    while True:
+        password = getpass.getpass("Password (min 6 characters): ")
+        if len(password) >= 6 and password == getpass.getpass("Repeat password: "):
+            break
+        print("Passwords did not match or were too short. Try again.")
+    if not login_id:
+        sys.exit("Super Admin ID cannot be empty.")
+    set_admin(login_id, password)
+    print("Super Admin saved.")
+
+
+def ensure_admin():
+    if get_admin():
+        return
+    env_id, env_pw = os.environ.get("SUPERADMIN_ID"), os.environ.get("SUPERADMIN_PASSWORD")
+    if env_id and env_pw:
+        set_admin(env_id.strip(), env_pw)
+    elif sys.stdin.isatty():
+        prompt_admin()
+    else:
+        sys.exit("No Super Admin yet. Run `python server.py --set-admin` "
+                 "or set SUPERADMIN_ID and SUPERADMIN_PASSWORD.")
+
+
+SESSIONS = {}  # token -> expiry timestamp (kept in memory; restarting the server logs out)
+SESSIONS_LOCK = threading.Lock()
+
+
+def check_login(login_id, password):
+    admin = get_admin()
+    if not admin:
+        return False
+    id_ok = hmac.compare_digest(str(login_id).strip().lower(), admin["login_id"].lower())
+    pw_ok = hmac.compare_digest(hash_password(str(password), admin["password_salt"]), admin["password_hash"])
+    return id_ok and pw_ok
+
+
+def new_session():
+    token = secrets.token_urlsafe(32)
+    with SESSIONS_LOCK:
+        SESSIONS[token] = time.time() + SESSION_HOURS * 3600
+    return token
+
+
+def session_valid(token):
+    with SESSIONS_LOCK:
+        expiry = SESSIONS.get(token)
+        if expiry and expiry > time.time():
+            return True
+        SESSIONS.pop(token, None)
+        return False
+
+
+def end_session(token):
+    with SESSIONS_LOCK:
+        SESSIONS.pop(token, None)
 
 
 def rows(cur):
@@ -242,9 +381,15 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=BASE_DIR, **kwargs)
 
-    def send_json(self, status, payload):
+    def session_token(self):
+        cookie = SimpleCookie(self.headers.get("Cookie") or "")
+        return cookie["session"].value if "session" in cookie else ""
+
+    def send_json(self, status, payload, cookie=None):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -255,6 +400,10 @@ class Handler(SimpleHTTPRequestHandler):
         if not parts or len(parts) > 2:
             return self.send_json(404, {"error": "Not found"})
         resource = parts[0]
+        if resource in ("login", "logout", "session") and len(parts) == 1:
+            return self.handle_auth(method, resource)
+        if not session_valid(self.session_token()):
+            return self.send_json(401, {"error": "Please log in"})
         id_ = None
         if len(parts) == 2:
             if not parts[1].isdigit():
@@ -283,6 +432,26 @@ class Handler(SimpleHTTPRequestHandler):
         finally:
             conn.close()
 
+    def handle_auth(self, method, resource):
+        if resource == "session" and method == "GET":
+            return self.send_json(200, {"logged_in": session_valid(self.session_token())})
+        if resource == "logout" and method == "POST":
+            end_session(self.session_token())
+            return self.send_json(200, {"logged_in": False}, cookie="session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict")
+        if resource == "login" and method == "POST":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                data = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError):
+                return self.send_json(400, {"error": "Invalid request"})
+            if not check_login(data.get("login_id", ""), data.get("password", "")):
+                time.sleep(1)  # slow down password guessing
+                return self.send_json(401, {"error": "Wrong ID or password"})
+            token = new_session()
+            return self.send_json(200, {"logged_in": True}, cookie=(
+                f"session={token}; Path=/; Max-Age={SESSION_HOURS * 3600}; HttpOnly; SameSite=Strict"))
+        return self.send_json(404, {"error": "Not found"})
+
     def route(self, method):
         if self.path.startswith("/api/"):
             return self.handle_api(method)
@@ -309,5 +478,9 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     init_db()
+    if "--set-admin" in sys.argv:
+        prompt_admin()
+        sys.exit(0)
+    ensure_admin()
     print(f"MATOSHREE billing running at http://localhost:{PORT}  (database: {DB_PATH})")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
