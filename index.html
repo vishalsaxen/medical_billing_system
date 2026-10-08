@@ -97,10 +97,12 @@
 <section id="login-screen">
   <form class="card" id="login-form">
     <h3>Super Admin Login</h3>
-    <input name="login_id" type="email" placeholder="Super Admin ID (email)" autocomplete="username" required>
-    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
-    <button class="btn" type="submit">Login</button>
+    <input name="mobile" type="tel" inputmode="numeric" placeholder="Mobile number" autocomplete="username" maxlength="14" required>
+    <input name="otp" type="text" inputmode="numeric" placeholder="OTP sent by SMS" autocomplete="one-time-code" maxlength="6" hidden>
+    <button class="btn" type="submit" id="login-button">Send OTP</button>
+    <button class="link" type="button" id="login-change" hidden>Change number / resend OTP</button>
     <div id="login-error"></div>
+    <div id="recaptcha"></div>
   </form>
 </section>
 
@@ -452,7 +454,7 @@ async function printBill(id) {
 function lock() {
   document.body.classList.add("locked");
   state.mains = state.subs = state.products = state.bill = [];
-  $("#login-form").login_id.focus();
+  resetLoginForm();
 }
 
 function unlock() {
@@ -462,15 +464,43 @@ function unlock() {
   renderBill();
 }
 
+// Step 1: mobile number -> "Send OTP". Step 2: OTP -> "Login".
+function resetLoginForm() {
+  const f = $("#login-form");
+  f.otp.hidden = true; f.otp.required = false; f.otp.value = "";
+  f.mobile.disabled = false;
+  $("#login-button").textContent = "Send OTP";
+  $("#login-change").hidden = true;
+  f.mobile.focus();
+}
+
 $("#login-form").addEventListener("submit", async e => {
   e.preventDefault();
-  const f = e.target;
+  const f = e.target, button = $("#login-button");
   $("#login-error").textContent = "";
+  button.disabled = true;
   try {
-    await window.firebaseLogin(f.login_id.value.trim(), f.password.value);
-    f.reset();  // the auth listener in the module script unlocks the page
-  } catch (err) { $("#login-error").textContent = err.message; f.password.value = ""; }
+    if (f.otp.hidden) {
+      await window.firebaseSendOtp(f.mobile.value);
+      f.mobile.disabled = true;
+      f.otp.hidden = false; f.otp.required = true; f.otp.focus();
+      button.textContent = "Login";
+      $("#login-change").hidden = false;
+      $("#login-error").textContent = "";
+      toast("OTP sent by SMS");
+    } else {
+      await window.firebaseVerifyOtp(f.otp.value.trim());
+      // the auth listener in the module script unlocks the page
+    }
+  } catch (err) {
+    $("#login-error").textContent = err.message;
+    f.otp.value = "";
+  } finally {
+    button.disabled = false;
+  }
 });
+
+$("#login-change").addEventListener("click", resetLoginForm);
 
 $("#logout").addEventListener("click", () => window.firebaseLogout());
 </script>
@@ -488,10 +518,12 @@ const firebaseConfig = {
 };
 // Firestore database to use: "(default)" unless you created a named database in Firestore.
 const FIRESTORE_DATABASE = "(default)";
+// The only mobile number that can log in (OTP by SMS). Keep it the same as in firestore.rules.
+const SUPER_ADMIN_PHONE = "+919665121212";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithPhoneNumber, RecaptchaVerifier, signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc,
@@ -712,14 +744,39 @@ window.firebaseApi = async (method, path, body = {}) => {
   }
 };
 
-window.firebaseLogin = async (email, password) => {
+// Accepts 9665121212, 96651 21212, 09665121212 or +91 9665121212.
+const toIndianE164 = value => {
+  const digits = String(value).replace(/\D/g, "").replace(/^(91|0)(?=\d{10}$)/, "");
+  return digits.length === 10 ? "+91" + digits : null;
+};
+
+let recaptcha = null, pendingOtp = null;
+
+window.firebaseSendOtp = async mobile => {
+  const phone = toIndianE164(mobile);
+  if (!phone) throw new Error("Enter a 10-digit mobile number");
+  // Only the Super Admin number may log in, so don't spend an SMS on any other number.
+  if (phone !== SUPER_ADMIN_PHONE) throw new Error("This mobile number is not the Super Admin.");
   try {
-    await signInWithEmailAndPassword(auth, email, password);
+    recaptcha ??= new RecaptchaVerifier(auth, "recaptcha", { size: "invisible" });
+    pendingOtp = await signInWithPhoneNumber(auth, phone, recaptcha);
   } catch (err) {
-    if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-email"].includes(err.code)) {
-      throw new Error("Wrong ID or password");
-    }
-    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again in a few minutes.");
+    recaptcha?.clear(); recaptcha = null;
+    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again later.");
+    if (err.code === "auth/invalid-phone-number") throw new Error("Enter a 10-digit mobile number");
+    throw new Error("Could not send the OTP: " + friendly(err));
+  }
+};
+
+window.firebaseVerifyOtp = async code => {
+  if (!pendingOtp) throw new Error("Send the OTP first");
+  if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit OTP");
+  try {
+    await pendingOtp.confirm(code);
+    pendingOtp = null;
+  } catch (err) {
+    if (err.code === "auth/invalid-verification-code") throw new Error("Wrong OTP. Check the SMS and try again.");
+    if (err.code === "auth/code-expired") throw new Error("The OTP has expired. Send a new one.");
     throw new Error(friendly(err));
   }
 };

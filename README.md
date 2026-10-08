@@ -1,7 +1,7 @@
 # MATOSHREE Surgical & Distributor – Billing
 
 A single-page billing app (`index.html`) that stores its data in **Firebase**
-(Cloud Firestore) and uses **Firebase Authentication** for the Super Admin login.
+(Cloud Firestore) and uses **Firebase Authentication** (SMS OTP on the Super Admin's mobile) for the login.
 There is no server to run.
 
 ## Tabs
@@ -18,12 +18,14 @@ There is no server to run.
    `index.html`. (These values are not secret; the security rules below protect the data.)
 2. **Firestore** – Build › Firestore Database › *Create database*. If you created a named database instead of
    `(default)`, put its name in `FIRESTORE_DATABASE` in `index.html`.
-3. **Super Admin login** – Build › Authentication › *Get started* › enable **Email/Password**. Under *Users* ›
-   *Add user*, create the Super Admin with an email (this is the login ID) and password.
-   Under Authentication › Settings › *User actions*, untick **Enable create (sign-up)** so nobody else can register.
-4. **Security rules** – put the Super Admin's email in `firestore.rules` and publish it
-   (paste it into Firestore › Rules, or run `firebase deploy --only firestore:rules`).
-   Only that login can read or write any data.
+3. **Super Admin login (mobile OTP)** – Build › Authentication › *Get started* › *Sign-in method* › enable
+   **Phone**. Firebase only sends real SMS on the **Blaze (pay-as-you-go)** plan. Make sure the address you open
+   the app from (for example `<project-id>.web.app`, or `localhost`) is listed under Authentication › Settings ›
+   *Authorized domains*. Only mobile **9665121212** can log in: the page refuses to send an OTP to any other
+   number, and the security rules refuse every other login.
+   To change the number, edit `SUPER_ADMIN_PHONE` in `index.html` and the number in `firestore.rules`.
+4. **Security rules** – publish `firestore.rules` (paste it into Firestore › Rules, or run
+   `firebase deploy --only firestore:rules`).
 
 The first time the Super Admin logs in, the starting categories are added automatically.
 
