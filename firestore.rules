@@ -2,9 +2,9 @@ rules_version = '2';
 
 // Only the Super Admin may read or write the billing data.
 // The Super Admin is the login whose mobile number (verified by SMS OTP) matches settings/admin.
-// Until settings/admin exists, the first login must be the starting number below; the page then
-// creates settings/admin. After that the number can only be changed from the page, by the
-// Super Admin, after verifying the new number with an OTP.
+// Enrollment: while settings/admin does not exist, the first person to log in with an OTP creates it
+// and becomes the Super Admin. After that nobody else can enroll, and the number can only be changed
+// from the page by the Super Admin, after verifying the new number with an OTP.
 service cloud.firestore {
   match /databases/{database}/documents {
     function adminPath() {
@@ -24,16 +24,17 @@ service cloud.firestore {
     function validAdminDoc() {
       return request.auth != null
         && request.auth.token.phone_number != null
-        && request.resource.data.keys().hasOnly(["uid", "phoneHash"])
+        && request.resource.data.keys().hasOnly(["uid", "phoneHash", "name"])
+        && (!("name" in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 80))
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.phoneHash == phoneHash();
     }
 
     match /settings/admin {
       // Readable by anyone so the login page can refuse other numbers before sending an SMS.
-      // It holds only a one-way hash of the number, not the number itself.
+      // It holds the Super Admin's name and a SHA-256 hash of the number, not the number in plain text.
       allow get: if true;
-      allow create: if validAdminDoc() && request.auth.token.phone_number == "+919284524383";
+      allow create: if validAdminDoc();
       allow update: if validAdminDoc() && resource.data.uid == request.auth.uid;
     }
 

@@ -40,6 +40,7 @@
   input, select { padding: 8px; border: 1px solid var(--border); border-radius: 5px; font-size: 14px; width: 100%; }
   button.btn { padding: 8px 14px; border: 0; border-radius: 5px; background: var(--brand); color: #fff; cursor: pointer; font-size: 14px; }
   button.btn:hover { background: var(--brand-dark); }
+  button.btn:disabled { opacity: .45; cursor: default; }
   button.btn.secondary { background: #f3e6dc; color: var(--text); }
   header.shop { position: relative; }
   .header-actions { position: absolute; top: 12px; right: 16px; display: flex; gap: 6px; }
@@ -76,6 +77,22 @@
   }
   #toast.error { background: var(--danger); }
   .placeholder { text-align: center; color: var(--muted); padding: 60px 16px; }
+  #login-hint { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+  .price-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .price-tools input { flex: 1 1 220px; }
+  .price-tools .btn { flex: 0 0 auto; }
+  details.main-group { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff; }
+  details.main-group > summary { cursor: pointer; padding: 10px 12px; font-weight: 600; color: var(--brand-dark); background: var(--accent); border-radius: 6px; }
+  details.main-group > summary small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .sub-group { padding: 8px 12px 4px; }
+  .sub-group h4 { margin: 4px 0 6px; font-size: 14px; }
+  .price-table input { padding: 6px; font-size: 13px; }
+  .price-table td { padding: 4px 6px; }
+  .price-table .w-unit { width: 90px; }
+  .price-table .w-money { width: 110px; }
+  .price-table .w-act { width: 120px; white-space: nowrap; text-align: right; }
+  .price-table tr.dirty td { background: #fff7ef; }
+  .price-table tr.new-row td { border-bottom: 0; }
 
   /* Printed bill */
   #print-area { display: none; }
@@ -106,7 +123,9 @@
 
 <section id="login-screen">
   <form class="card" id="login-form">
-    <h3>Super Admin Login</h3>
+    <h3 id="login-title">Super Admin Login</h3>
+    <p id="login-hint" hidden></p>
+    <input name="admin_name" placeholder="Your name" autocomplete="name" hidden>
     <input name="mobile" type="tel" inputmode="numeric" placeholder="Mobile number" autocomplete="username" maxlength="14" required>
     <input name="otp" type="text" inputmode="numeric" placeholder="OTP sent by SMS" autocomplete="one-time-code" maxlength="6" hidden>
     <button class="btn" type="submit" id="login-button">Send OTP</button>
@@ -124,6 +143,15 @@
 <main>
   <!-- ================= MAIN TAB ================= -->
   <section id="tab-main" class="tab active">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Price List: MRP &amp; S.P.</h3>
+      <div class="price-tools">
+        <input id="price-search" placeholder="Search category, sub category or product…">
+        <button class="btn secondary" type="button" id="price-expand">Expand all</button>
+        <button class="btn secondary" type="button" id="price-collapse">Collapse all</button>
+      </div>
+      <div id="price-list"></div>
+    </div>
     <div class="grid">
       <div class="card">
         <h3>Main Categories</h3>
@@ -155,23 +183,6 @@
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px">
-      <h3>Products &amp; Selling Price</h3>
-      <form class="row" id="form-product">
-        <input type="hidden" name="id">
-        <select name="filter_main" aria-label="Main category"></select>
-        <select name="sub_category_id" required aria-label="Sub category"></select>
-        <input name="name" placeholder="Product name" required>
-        <input name="unit" placeholder="Unit (Nos, Box, Pkt)" value="Nos">
-        <input name="selling_price" type="number" step="0.01" min="0" placeholder="Selling price (₹)" required>
-        <button class="btn" type="submit">Save</button>
-        <button class="btn secondary" type="reset">Clear</button>
-      </form>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Main Category</th><th>Sub Category</th><th>Product</th><th>Unit</th><th class="num">Selling Price (₹)</th><th></th></tr></thead>
-        <tbody id="list-product"></tbody>
-      </table></div>
-    </div>
   </section>
 
   <!-- ================= SALE TAB ================= -->
@@ -185,7 +196,7 @@
           <input name="q" placeholder="Search product…">
         </form>
         <div class="table-wrap"><table>
-          <thead><tr><th>Main</th><th>Sub</th><th>Product</th><th>Unit</th><th class="num">Price (₹)</th><th></th></tr></thead>
+          <thead><tr><th>Main</th><th>Sub</th><th>Product</th><th>Unit</th><th class="num">MRP (₹)</th><th class="num">S.P. (₹)</th><th></th></tr></thead>
           <tbody id="sale-items"></tbody>
         </table></div>
       </div>
@@ -279,7 +290,7 @@ async function loadAll() {
   }
   renderMain();
   renderSub();
-  renderProducts();
+  renderPriceList();
   renderSaleFilters();
   renderSaleItems();
 }
@@ -319,35 +330,99 @@ function editSub(id) {
   f.id.value = s.id; f.main_category_id.value = s.main_category_id; f.name.value = s.name; f.name.focus();
 }
 
-// ---------- products ----------
-function fillProductSubs(selectedSub) {
-  const f = $("#form-product");
-  const subs = state.subs.filter(s => !f.filter_main.value || String(s.main_category_id) === f.filter_main.value);
-  f.sub_category_id.innerHTML = options(subs, "Select sub category", selectedSub);
+// ---------- price list (MRP & S.P.) ----------
+const openGroups = new Set();  // main category ids the user has expanded
+
+function priceRow(p) {
+  return `<tr data-id="${p.id}">
+    <td><input name="name" value="${esc(p.name)}" aria-label="Product"></td>
+    <td class="w-unit"><input name="unit" value="${esc(p.unit)}" aria-label="Unit"></td>
+    <td class="w-money"><input name="mrp" type="number" min="0" step="0.01" value="${p.mrp ?? ""}" aria-label="MRP"></td>
+    <td class="w-money"><input name="selling_price" type="number" min="0" step="0.01" value="${p.selling_price ?? ""}" aria-label="S.P."></td>
+    <td class="w-act"><button class="btn" type="button" data-act="save" disabled>Save</button>
+      <button class="link danger" type="button" data-act="delete">Delete</button></td></tr>`;
 }
 
-function renderProducts() {
-  const f = $("#form-product");
-  f.filter_main.innerHTML = options(state.mains, "All main categories", f.filter_main.value);
-  fillProductSubs(f.sub_category_id.value);
-  $("#list-product").innerHTML = state.products.length ? state.products.map(p => `
-    <tr><td>${esc(p.main_category_name)}</td><td>${esc(p.sub_category_name)}</td><td>${esc(p.name)}</td>
-      <td>${esc(p.unit)}</td><td class="num">${money(p.selling_price)}</td>
-      <td class="num"><button class="link" onclick="editProduct('${p.id}')">Edit</button>
-      <button class="link danger" onclick="removeItem('products', '${p.id}')">Delete</button></td></tr>`).join("")
-    : `<tr><td colspan="6" class="empty">No products yet</td></tr>`;
+function newRow(subId) {
+  return `<tr class="new-row" data-sub="${subId}">
+    <td><input name="name" placeholder="New product name" aria-label="New product"></td>
+    <td class="w-unit"><input name="unit" placeholder="Nos" aria-label="Unit"></td>
+    <td class="w-money"><input name="mrp" type="number" min="0" step="0.01" placeholder="MRP" aria-label="MRP"></td>
+    <td class="w-money"><input name="selling_price" type="number" min="0" step="0.01" placeholder="S.P." aria-label="S.P."></td>
+    <td class="w-act"><button class="btn" type="button" data-act="add">Add</button></td></tr>`;
 }
 
-function editProduct(id) {
-  const p = state.products.find(x => x.id === id), f = $("#form-product");
-  f.id.value = p.id;
-  f.filter_main.value = p.main_category_id;
-  fillProductSubs(p.sub_category_id);
-  f.name.value = p.name; f.unit.value = p.unit; f.selling_price.value = p.selling_price;
-  f.name.focus();
+function renderPriceList() {
+  const q = $("#price-search").value.trim().toLowerCase();
+  const html = state.mains.map(m => {
+    const mainHit = !q || m.name.toLowerCase().includes(q);
+    const subs = state.subs.filter(s => s.main_category_id === m.id).map(s => {
+      const subHit = mainHit || s.name.toLowerCase().includes(q);
+      const products = state.products.filter(p => p.sub_category_id === s.id && (subHit || p.name.toLowerCase().includes(q)));
+      return (subHit || products.length) ? { s, products } : null;
+    }).filter(Boolean);
+    if (!mainHit && !subs.length) return "";
+    const count = subs.reduce((n, x) => n + x.products.length, 0);
+    const open = q || openGroups.has(m.id) ? "open" : "";
+    return `<details class="main-group" data-main="${m.id}" ${open}>
+      <summary>${esc(m.name)}<small>${subs.length} sub categories · ${count} products</small></summary>
+      ${subs.map(({ s, products }) => `<div class="sub-group"><h4>${esc(s.name)}</h4>
+        <div class="table-wrap"><table class="price-table">
+          <thead><tr><th>Product</th><th>Unit</th><th class="num">MRP (₹)</th><th class="num">S.P. (₹)</th><th></th></tr></thead>
+          <tbody>${products.map(priceRow).join("")}${newRow(s.id)}</tbody>
+        </table></div></div>`).join("") || `<p class="empty">No sub categories yet</p>`}
+    </details>`;
+  }).join("");
+  $("#price-list").innerHTML = html || `<p class="empty">${q ? "Nothing matches the search" : "Add a main category to start"}</p>`;
 }
 
-$("#form-product").filter_main.addEventListener("change", () => fillProductSubs(""));
+const rowData = tr => Object.fromEntries([...tr.querySelectorAll("input")].map(i => [i.name, i.value.trim()]));
+
+function checkPrices(d) {
+  if (!d.name) throw new Error("Enter the product name");
+  if (d.mrp === "" || d.selling_price === "") throw new Error("Enter both MRP and S.P.");
+  if (Number(d.selling_price) > Number(d.mrp)) throw new Error("S.P. cannot be more than MRP");
+}
+
+$("#price-list").addEventListener("toggle", e => {
+  const id = e.target.dataset?.main;
+  if (id && !$("#price-search").value) e.target.open ? openGroups.add(id) : openGroups.delete(id);
+}, true);
+
+$("#price-list").addEventListener("input", e => {
+  const tr = e.target.closest("tr[data-id]");
+  if (tr) { tr.classList.add("dirty"); tr.querySelector("[data-act=save]").disabled = false; }
+});
+
+$("#price-list").addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.matches("input")) e.target.closest("tr").querySelector("[data-act=save],[data-act=add]")?.click();
+});
+
+$("#price-list").addEventListener("click", async e => {
+  const button = e.target.closest("button[data-act]");
+  if (!button) return;
+  const tr = button.closest("tr"), act = button.dataset.act;
+  try {
+    if (act === "delete") return removeItem("products", tr.dataset.id);
+    const d = rowData(tr);
+    checkPrices(d);
+    button.disabled = true;
+    if (act === "add") {
+      await api("POST", "products", { ...d, sub_category_id: tr.dataset.sub });
+      toast("Added " + d.name);
+    } else {
+      const p = state.products.find(x => x.id === tr.dataset.id);
+      await api("PUT", "products/" + p.id, { ...d, sub_category_id: p.sub_category_id });
+      toast("Saved " + d.name);
+    }
+    await loadAll();
+    if (act === "add") $(`#price-list tr.new-row[data-sub="${tr.dataset.sub}"] input`)?.focus();
+  } catch (err) { button.disabled = false; toast(err.message, true); }
+});
+
+$("#price-search").addEventListener("input", renderPriceList);
+$("#price-expand").addEventListener("click", () => { state.mains.forEach(m => openGroups.add(m.id)); renderPriceList(); });
+$("#price-collapse").addEventListener("click", () => { openGroups.clear(); renderPriceList(); });
 
 // ---------- shared save / delete ----------
 function bindForm(formId, resource, fields) {
@@ -358,11 +433,8 @@ function bindForm(formId, resource, fields) {
     try {
       await api(f.id.value ? "PUT" : "POST", resource + (f.id.value ? "/" + f.id.value : ""), body);
       toast(f.id.value ? "Updated" : "Saved");
-      const keep = formId === "#form-product" ? { filter_main: f.filter_main.value, sub: f.sub_category_id.value } : null;
       f.reset(); f.id.value = "";
-      if (keep) { f.filter_main.value = keep.filter_main; }
       await loadAll();
-      if (keep) { fillProductSubs(keep.sub); }
       f.name.focus();
     } catch (err) { toast(err.message, true); }
   });
@@ -370,7 +442,6 @@ function bindForm(formId, resource, fields) {
 }
 bindForm("#form-main", "main-categories", ["name"]);
 bindForm("#form-sub", "sub-categories", ["main_category_id", "name"]);
-bindForm("#form-product", "products", ["sub_category_id", "name", "unit", "selling_price"]);
 
 async function removeItem(resource, id, alsoDeletes) {
   if (!confirm("Delete this entry" + (alsoDeletes ? " and " + alsoDeletes : "") + "?")) return;
@@ -394,9 +465,9 @@ function renderSaleItems() {
     (!q || p.name.toLowerCase().includes(q)));
   $("#sale-items").innerHTML = list.length ? list.map(p => `
     <tr><td>${esc(p.main_category_name)}</td><td>${esc(p.sub_category_name)}</td><td>${esc(p.name)}</td>
-      <td>${esc(p.unit)}</td><td class="num">${money(p.selling_price)}</td>
+      <td>${esc(p.unit)}</td><td class="num">${money(p.mrp)}</td><td class="num">${money(p.selling_price)}</td>
       <td class="num"><button class="btn" onclick="addToBill('${p.id}')">Add</button></td></tr>`).join("")
-    : `<tr><td colspan="6" class="empty">No items. Add products in the Main tab.</td></tr>`;
+    : `<tr><td colspan="7" class="empty">No items. Add products with MRP and S.P. in the Main tab.</td></tr>`;
 }
 
 const saleFilter = $("#sale-filter");
@@ -408,15 +479,15 @@ function addToBill(id) {
   const p = state.products.find(x => x.id === id);
   const line = state.bill.find(l => l.product_id === id);
   if (line) line.qty += 1;
-  else state.bill.push({ product_id: p.id, name: p.name, unit: p.unit, qty: 1, price: p.selling_price });
+  else state.bill.push({ product_id: p.id, name: p.name, unit: p.unit, mrp: p.mrp, qty: 1, price: p.selling_price });
   renderBill();
 }
 
 function renderBill() {
   $("#bill-lines").innerHTML = state.bill.length ? state.bill.map((l, i) => `
-    <tr><td>${esc(l.name)}<br><small style="color:var(--muted)">${esc(l.unit)}</small></td>
+    <tr><td>${esc(l.name)}<br><small style="color:var(--muted)">${esc(l.unit)} · MRP ${money(l.mrp)}</small></td>
       <td><input class="qty" type="number" min="1" step="1" value="${l.qty}" onchange="setLine(${i}, 'qty', this.value)"></td>
-      <td><input class="price-input" type="number" min="0" step="0.01" value="${l.price}" onchange="setLine(${i}, 'price', this.value)"></td>
+      <td><input class="price-input" type="number" min="0" max="${l.mrp}" step="0.01" value="${l.price}" onchange="setLine(${i}, 'price', this.value)"></td>
       <td class="num">${money(l.qty * l.price)}</td>
       <td><button class="link danger" onclick="state.bill.splice(${i}, 1); renderBill()">✕</button></td></tr>`).join("")
     : `<tr><td colspan="5" class="empty">Click "Add" on an item to start a bill</td></tr>`;
@@ -425,7 +496,9 @@ function renderBill() {
 
 function setLine(i, key, value) {
   const n = Number(value);
-  state.bill[i][key] = key === "qty" ? Math.max(1, n || 1) : Math.max(0, n || 0);
+  const line = state.bill[i];
+  if (key === "price" && n > line.mrp) toast("Rate cannot be more than MRP (" + money(line.mrp) + ")", true);
+  line[key] = key === "qty" ? Math.max(1, n || 1) : Math.min(line.mrp, Math.max(0, n || 0));
   renderBill();
 }
 
@@ -467,10 +540,10 @@ async function printBill(id) {
     </div>
     <div class="meta"><span><b>Bill No:</b> ${esc(s.bill_no)}</span><span><b>Date:</b> ${esc(s.bill_date)}</span></div>
     <div class="meta"><span><b>Customer:</b> ${esc(s.customer_name) || "-"}</span><span><b>Mobile:</b> ${esc(s.customer_phone) || "-"}</span></div>
-    <table><thead><tr><th>#</th><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+    <table><thead><tr><th>#</th><th>Item</th><th>Unit</th><th class="num">MRP</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
     <tbody>${s.items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}</td><td>${esc(it.unit)}</td>
-      <td class="num">${it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.amount)}</td></tr>`).join("")}</tbody>
-    <tfoot><tr><th colspan="5" class="num">Total ₹</th><th class="num">${money(s.total)}</th></tr></tfoot></table>`;
+      <td class="num">${it.mrp == null ? "-" : money(it.mrp)}</td><td class="num">${it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.amount)}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><th colspan="6" class="num">Total ₹</th><th class="num">${money(s.total)}</th></tr></tfoot></table>`;
   window.print();
 }
 
@@ -488,9 +561,21 @@ function unlock() {
   renderBill();
 }
 
-// Step 1: mobile number -> "Send OTP". Step 2: OTP -> "Login".
+// No Super Admin yet: the first person to enroll (name + mobile + OTP) becomes the Super Admin.
+let enrollMode = false;
+function setEnrollMode(on) {
+  enrollMode = on;
+  const f = $("#login-form");
+  $("#login-title").textContent = on ? "Super Admin Enrollment" : "Super Admin Login";
+  $("#login-hint").hidden = !on;
+  $("#login-hint").textContent = "No Super Admin yet. Enroll with your mobile number and you become the Super Admin.";
+  f.admin_name.hidden = !on; f.admin_name.required = on;
+}
+
+// Step 1: mobile number -> "Send OTP". Step 2: OTP -> "Login" / "Enroll".
 function resetLoginForm() {
   const f = $("#login-form");
+  f.admin_name.disabled = false;
   f.otp.hidden = true; f.otp.required = false; f.otp.value = "";
   f.mobile.disabled = false;
   $("#login-button").textContent = "Send OTP";
@@ -505,10 +590,11 @@ $("#login-form").addEventListener("submit", async e => {
   button.disabled = true;
   try {
     if (f.otp.hidden) {
-      await window.firebaseSendOtp(f.mobile.value);
-      f.mobile.disabled = true;
+      const status = await window.firebaseSendOtp(f.mobile.value, f.admin_name.value.trim());
+      if (status.enroll !== enrollMode) setEnrollMode(status.enroll);
+      f.mobile.disabled = true; f.admin_name.disabled = true;
       f.otp.hidden = false; f.otp.required = true; f.otp.focus();
-      button.textContent = "Login";
+      button.textContent = enrollMode ? "Enroll as Super Admin" : "Login";
       $("#login-change").hidden = false;
       $("#login-error").textContent = "";
       toast("OTP sent by SMS");
@@ -517,6 +603,7 @@ $("#login-form").addEventListener("submit", async e => {
       // the auth listener in the module script unlocks the page
     }
   } catch (err) {
+    if (err.enroll && !enrollMode) { setEnrollMode(true); f.admin_name.focus(); }
     $("#login-error").textContent = err.message;
     f.otp.value = "";
   } finally {
@@ -575,17 +662,13 @@ $("#change-form").addEventListener("submit", async e => {
 // Firebase project settings. Copy them from Firebase console > Project settings > Your apps > Web app (SDK setup and configuration).
 const firebaseConfig = {
   apiKey: "PASTE_API_KEY",
-  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
-  projectId: "PASTE_PROJECT_ID",
-  storageBucket: "PASTE_PROJECT_ID.appspot.com",
+  authDomain: "ganesh-gaurav.firebaseapp.com",
+  projectId: "ganesh-gaurav",
   messagingSenderId: "PASTE_SENDER_ID",
   appId: "PASTE_APP_ID",
 };
 // Firestore database to use: "(default)" unless you created a named database in Firestore.
 const FIRESTORE_DATABASE = "(default)";
-// Starting login number, used only until the first login saves it in the database.
-// After that, change it from the page ("Change login number"). Keep it the same as in firestore.rules.
-const INITIAL_SUPER_ADMIN_PHONE = "+919284524383";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -723,7 +806,7 @@ const routes = {
     return products.map(p => {
       const sub = subById[p.subCategoryId] || {};
       return {
-        id: p.id, name: p.name, unit: p.unit, selling_price: p.sellingPrice,
+        id: p.id, name: p.name, unit: p.unit, mrp: p.mrp ?? p.sellingPrice, selling_price: p.sellingPrice,
         sub_category_id: p.subCategoryId, sub_category_name: sub.name || "?",
         main_category_id: sub.mainCategoryId, main_category_name: mainName[sub.mainCategoryId] || "?",
       };
@@ -762,7 +845,9 @@ const routes = {
       const p = products[it.product_id];
       if (!p) throw new Error("One of the items no longer exists");
       const qty = number(it.qty, "Quantity", 0.001), price = number(it.price ?? p.sellingPrice, "Rate");
-      return { product_id: p.id, name: p.name, unit: p.unit, qty, price, amount: Math.round(qty * price * 100) / 100 };
+      const mrp = p.mrp ?? p.sellingPrice;
+      if (price > mrp) throw new Error(`Rate for ${p.name} cannot be more than MRP (${mrp})`);
+      return { product_id: p.id, name: p.name, unit: p.unit, mrp, qty, price, amount: Math.round(qty * price * 100) / 100 };
     });
     const total = Math.round(items.reduce((s, it) => s + it.amount, 0) * 100) / 100;
     const now = new Date(), pad = n => String(n).padStart(2, "0");
@@ -789,8 +874,14 @@ function productData(b) {
   const name = text(b.name, "Product name");
   return {
     subCategoryId: text(b.sub_category_id, "Sub category"), name, nameKey: name.toLowerCase(),
-    unit: String(b.unit || "").trim() || "Nos", sellingPrice: number(b.selling_price, "Selling price"),
+    unit: String(b.unit || "").trim() || "Nos", ...prices(b),
   };
+}
+
+function prices(b) {
+  const mrp = number(b.mrp, "MRP"), sellingPrice = number(b.selling_price, "S.P.");
+  if (sellingPrice > mrp) throw new Error("S.P. cannot be more than MRP");
+  return { mrp, sellingPrice };
 }
 
 const friendly = err => {
@@ -837,21 +928,27 @@ const otpError = err => {
   return new Error("Could not send the OTP: " + friendly(err));
 };
 
-async function isLoginNumber(phone) {
-  const admin = await getDoc(ADMIN_REF);
-  return admin.exists() ? admin.data().phoneHash === await sha256(phone) : phone === INITIAL_SUPER_ADMIN_PHONE;
-}
+let enrollName = "";
 
-window.firebaseSendOtp = async mobile => {
+window.firebaseAdminEnrolled = async () => (await getDoc(ADMIN_REF)).exists();
+
+window.firebaseSendOtp = async (mobile, name) => {
   const phone = toIndianE164(mobile);
   if (!phone) throw new Error("Enter a 10-digit mobile number");
-  // Only the Super Admin number may log in, so don't spend an SMS on any other number.
-  if (!(await isLoginNumber(phone))) throw new Error("This mobile number is not the Super Admin.");
+  const admin = await getDoc(ADMIN_REF);
+  if (admin.exists()) {
+    // Only the Super Admin number may log in, so don't spend an SMS on any other number.
+    if (admin.data().phoneHash !== await sha256(phone)) throw new Error("This mobile number is not the Super Admin.");
+  } else if (!name) {
+    throw Object.assign(new Error("Enter your name to enroll as Super Admin"), { enroll: true });
+  }
+  enrollName = admin.exists() ? "" : name;
   try {
     pendingOtp = await signInWithPhoneNumber(auth, phone, verifier());
   } catch (err) {
     throw otpError(err);
   }
+  return { enroll: !admin.exists() };
 };
 
 window.firebaseSendChangeOtp = async mobile => {
@@ -881,7 +978,7 @@ window.firebaseConfirmChange = async code => {
     throw new Error(friendly(err));
   }
   await user.getIdToken(true);  // the new token carries the new number, which the rules check
-  await saveAdmin(user);
+  await saveAdmin(user, (await getDoc(ADMIN_REF)).data()?.name);
   const phone = pendingChange.phone;
   pendingChange = null;
   return phone;
@@ -889,16 +986,19 @@ window.firebaseConfirmChange = async code => {
 
 // Records (or refreshes) this login as the Super Admin. The rules only allow the first login with the
 // starting number, or the same login after it verified a new number.
-async function saveAdmin(user) {
-  await setDoc(ADMIN_REF, { uid: user.uid, phoneHash: await sha256(user.phoneNumber) });
+async function saveAdmin(user, name) {
+  await setDoc(ADMIN_REF, { uid: user.uid, phoneHash: await sha256(user.phoneNumber), name: name || "" });
 }
 
 async function ensureAdmin(user) {
   const admin = await getDoc(ADMIN_REF);
   const hash = await sha256(user.phoneNumber || "");
-  if (!admin.exists() || (admin.data().uid === user.uid && admin.data().phoneHash !== hash)) {
-    await saveAdmin(user);  // first login, or finishing a number change that was interrupted
+  if (!admin.exists()) {
+    await saveAdmin(user, enrollName);  // enrollment: this login becomes the Super Admin
+  } else if (admin.data().uid === user.uid && admin.data().phoneHash !== hash) {
+    await saveAdmin(user, admin.data().name);  // finishing a number change that was interrupted
   }
+  enrollName = "";
 }
 
 window.firebaseVerifyOtp = async code => {
@@ -917,7 +1017,11 @@ window.firebaseVerifyOtp = async code => {
 window.firebaseLogout = () => signOut(auth);
 
 onAuthStateChanged(auth, async user => {
-  if (!user) return lock();
+  if (!user) {
+    lock();
+    window.firebaseAdminEnrolled().then(enrolled => setEnrollMode(!enrolled)).catch(() => {});
+    return;
+  }
   try {
     await ensureAdmin(user);
     await seedIfEmpty();
