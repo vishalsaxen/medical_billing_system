@@ -1,45 +1,19 @@
 rules_version = '2';
 
-// Only the Super Admin may read or write the billing data.
-// The Super Admin is the login whose mobile number (verified by SMS OTP) matches settings/admin.
-// Enrollment: while settings/admin does not exist, the first person to log in with an OTP creates it
-// and becomes the Super Admin. After that nobody else can enroll, and the number can only be changed
-// from the page by the Super Admin, after verifying the new number with an OTP.
+// Only the root Super Admin login (vishalsaxen@gmail.com, signed in with its Firebase password)
+// may read or write anything. Keep the email the same as SUPER_ADMIN_EMAIL in index.html.
+// Create that user once in Firebase console > Authentication > Users > Add user, and turn off
+// sign-up (Authentication > Settings > User actions) so nobody else can register.
 service cloud.firestore {
   match /databases/{database}/documents {
-    function adminPath() {
-      return /databases/$(database)/documents/settings/admin;
-    }
-    function phoneHash() {
-      return hashing.sha256(request.auth.token.phone_number).toHexString().lower();
-    }
     function isSuperAdmin() {
       return request.auth != null
-        && request.auth.token.phone_number != null
-        && exists(adminPath())
-        && get(adminPath()).data.uid == request.auth.uid
-        && get(adminPath()).data.phoneHash == phoneHash();
-    }
-    // settings/admin may only ever say: this login (uid) with its own verified number.
-    function validAdminDoc() {
-      return request.auth != null
-        && request.auth.token.phone_number != null
-        && request.resource.data.keys().hasOnly(["uid", "phoneHash", "name"])
-        && (!("name" in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 80))
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.phoneHash == phoneHash();
+        && request.auth.token.firebase.sign_in_provider == "password"
+        && request.auth.token.email == "vishalsaxen@gmail.com";
     }
 
-    match /settings/admin {
-      // Readable by anyone so the login page can refuse other numbers before sending an SMS.
-      // It holds the Super Admin's name and a SHA-256 hash of the number, not the number in plain text.
-      allow get: if true;
-      allow create: if validAdminDoc();
-      allow update: if validAdminDoc() && resource.data.uid == request.auth.uid;
-    }
-
-    match /{collection}/{rest=**} {
-      allow read, write: if collection != "settings" && isSuperAdmin();
+    match /{document=**} {
+      allow read, write: if isSuperAdmin();
     }
   }
 }

@@ -1,7 +1,7 @@
 # MATOSHREE Surgical & Distributor – Billing
 
 A single-page billing app (`index.html`) that stores its data in **Firebase**
-(Cloud Firestore) and uses **Firebase Authentication** (SMS OTP on the Super Admin's mobile) for the login.
+(Cloud Firestore) and uses **Firebase Authentication** (email and password) for the Super Admin login.
 There is no server to run.
 
 ## Tabs
@@ -18,15 +18,13 @@ There is no server to run.
    `index.html`. (These values are not secret; the security rules below protect the data.)
 2. **Firestore** – Build › Firestore Database › *Create database*. If you created a named database instead of
    `(default)`, put its name in `FIRESTORE_DATABASE` in `index.html`.
-3. **Super Admin login (mobile OTP)** – Build › Authentication › *Get started* › *Sign-in method* › enable
-   **Phone**. Firebase only sends real SMS on the **Blaze (pay-as-you-go)** plan. Make sure the address you open
-   the app from (for example `<project-id>.web.app`, or `localhost`) is listed under Authentication › Settings ›
-   *Authorized domains*.
-   **Enrollment:** while there is no Super Admin yet, the page shows *Super Admin Enrollment*. The first person
-   to enter their name, mobile number and OTP becomes the Super Admin, and enrollment closes for everyone else.
-   So enroll right after publishing the app. To move the login to another number later, use
-   **Change login number** in the header: enter the new number and the OTP sent to it.
-   The page refuses to send an OTP to any other number, and the security rules refuse every other login.
+3. **Super Admin login** – Build › Authentication › *Get started* › *Sign-in method* › enable **Email/Password**.
+   Under *Users* › *Add user*, create **vishalsaxen@gmail.com** (the root Super Admin username) with its password.
+   The password lives only in Firebase, never in this code. Then, under Authentication › Settings › *User actions*,
+   untick **Enable create (sign-up)** so nobody else can register. If the app is opened from a new address
+   (for example `vishalsaxen.github.io`), add it under Authentication › Settings › *Authorized domains*.
+   Once logged in, **Change password** in the header changes it. **Forgot password?** on the login screen emails a
+   reset link to vishalsaxen@gmail.com.
 4. **Security rules** – publish `firestore.rules` (paste it into Firestore › Rules, or run
    `firebase deploy --only firestore:rules`).
 
@@ -36,7 +34,9 @@ The first time the Super Admin logs in, the starting categories are added automa
 
 Firebase login does not work from a `file://` page, so open it over http:
 
-- **Firebase Hosting** (recommended): `npm i -g firebase-tools`, `firebase login`, `firebase use <project-id>`,
+- **GitHub Pages**: repo Settings › Pages › *Deploy from a branch* › `main` / `(root)`. The app is then at
+  https://vishalsaxen.github.io/medical_billing_system/
+- **Firebase Hosting**: `npm i -g firebase-tools`, `firebase login`, `firebase use <project-id>`,
   then `firebase deploy`. The app is then at `https://<project-id>.web.app`.
 - **On this computer**: `python -m http.server 8000` in this folder, then open http://localhost:8000.
 
@@ -49,4 +49,3 @@ Firebase login does not work from a `file://` page, so open it over http:
 | `products`       | `subCategoryId`, `name`, `nameKey`, `unit`, `mrp`, `sellingPrice` |
 | `sales`          | `number`, `bill_no`, `bill_date`, `customer_name`, `customer_phone`, `items[]`, `total` |
 | `counters/sales` | `last` (last bill number used) |
-| `settings/admin` | `uid`, `phoneHash` (SHA-256 of the login number), `name` |

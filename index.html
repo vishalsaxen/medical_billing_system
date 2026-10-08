@@ -77,7 +77,6 @@
   }
   #toast.error { background: var(--danger); }
   .placeholder { text-align: center; color: var(--muted); padding: 60px 16px; }
-  #login-hint { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
   .price-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .price-tools input { flex: 1 1 220px; }
   .price-tools .btn { flex: 0 0 auto; }
@@ -116,20 +115,18 @@
   <p>1344, Sadashiv Peth, Bharat Natya Mandir Road, Near Chimnya Ganapati, Opp. Godbole Hospital, Pune - 411030</p>
   <p>GST No. 27ACIFM1626L1ZZ &nbsp;|&nbsp; Mobile: 9665 12 12 12 / 8669 56 42 42</p>
   <div class="header-actions">
-    <button class="btn" id="change-number" type="button">Change login number</button>
+    <button class="btn" id="change-password" type="button">Change password</button>
     <button class="btn" id="logout" type="button">Logout</button>
   </div>
 </header>
 
 <section id="login-screen">
   <form class="card" id="login-form">
-    <h3 id="login-title">Super Admin Login</h3>
-    <p id="login-hint" hidden></p>
-    <input name="admin_name" placeholder="Your name" autocomplete="name" hidden>
-    <input name="mobile" type="tel" inputmode="numeric" placeholder="Mobile number" autocomplete="username" maxlength="14" required>
-    <input name="otp" type="text" inputmode="numeric" placeholder="OTP sent by SMS" autocomplete="one-time-code" maxlength="6" hidden>
-    <button class="btn" type="submit" id="login-button">Send OTP</button>
-    <button class="link" type="button" id="login-change" hidden>Change number / resend OTP</button>
+    <h3>Super Admin Login</h3>
+    <input name="email" type="email" placeholder="Username (email)" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button class="btn" type="submit" id="login-button">Login</button>
+    <button class="link" type="button" id="forgot-password">Forgot password?</button>
     <div id="login-error"></div>
   </form>
 </section>
@@ -236,19 +233,18 @@
 
 <dialog id="change-dialog">
   <form class="card" id="change-form">
-    <h3>Change login number</h3>
-    <p>Enter the new mobile number. After you enter the OTP sent to it, only the new number can log in.</p>
-    <input name="mobile" type="tel" inputmode="numeric" placeholder="New mobile number" maxlength="14" required>
-    <input name="otp" type="text" inputmode="numeric" placeholder="OTP sent to the new number" autocomplete="one-time-code" maxlength="6" hidden>
+    <h3>Change password</h3>
+    <input name="current" type="password" placeholder="Current password" autocomplete="current-password" required>
+    <input name="next" type="password" placeholder="New password (min 8 characters)" autocomplete="new-password" minlength="8" required>
+    <input name="confirm" type="password" placeholder="Repeat new password" autocomplete="new-password" minlength="8" required>
     <div id="change-error"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn secondary" type="button" id="change-cancel">Cancel</button>
-      <button class="btn" type="submit" id="change-button">Send OTP</button>
+      <button class="btn" type="submit" id="change-button">Change password</button>
     </div>
   </form>
 </dialog>
 
-<div id="recaptcha"></div>
 <div id="print-area"></div>
 <div id="toast"></div>
 
@@ -561,26 +557,11 @@ function unlock() {
   renderBill();
 }
 
-// No Super Admin yet: the first person to enroll (name + mobile + OTP) becomes the Super Admin.
-let enrollMode = false;
-function setEnrollMode(on) {
-  enrollMode = on;
-  const f = $("#login-form");
-  $("#login-title").textContent = on ? "Super Admin Enrollment" : "Super Admin Login";
-  $("#login-hint").hidden = !on;
-  $("#login-hint").textContent = "No Super Admin yet. Enroll with your mobile number and you become the Super Admin.";
-  f.admin_name.hidden = !on; f.admin_name.required = on;
-}
-
-// Step 1: mobile number -> "Send OTP". Step 2: OTP -> "Login" / "Enroll".
 function resetLoginForm() {
   const f = $("#login-form");
-  f.admin_name.disabled = false;
-  f.otp.hidden = true; f.otp.required = false; f.otp.value = "";
-  f.mobile.disabled = false;
-  $("#login-button").textContent = "Send OTP";
-  $("#login-change").hidden = true;
-  f.mobile.focus();
+  f.password.value = "";
+  if (!f.email.value) f.email.value = window.SUPER_ADMIN_EMAIL || "";
+  (f.email.value ? f.password : f.email).focus();
 }
 
 $("#login-form").addEventListener("submit", async e => {
@@ -589,46 +570,33 @@ $("#login-form").addEventListener("submit", async e => {
   $("#login-error").textContent = "";
   button.disabled = true;
   try {
-    if (f.otp.hidden) {
-      const status = await window.firebaseSendOtp(f.mobile.value, f.admin_name.value.trim());
-      if (status.enroll !== enrollMode) setEnrollMode(status.enroll);
-      f.mobile.disabled = true; f.admin_name.disabled = true;
-      f.otp.hidden = false; f.otp.required = true; f.otp.focus();
-      button.textContent = enrollMode ? "Enroll as Super Admin" : "Login";
-      $("#login-change").hidden = false;
-      $("#login-error").textContent = "";
-      toast("OTP sent by SMS");
-    } else {
-      await window.firebaseVerifyOtp(f.otp.value.trim());
-      // the auth listener in the module script unlocks the page
-    }
+    await window.firebaseLogin(f.email.value.trim(), f.password.value);
+    // the auth listener in the module script unlocks the page
   } catch (err) {
-    if (err.enroll && !enrollMode) { setEnrollMode(true); f.admin_name.focus(); }
     $("#login-error").textContent = err.message;
-    f.otp.value = "";
+    f.password.value = "";
   } finally {
     button.disabled = false;
   }
 });
 
-$("#login-change").addEventListener("click", resetLoginForm);
+$("#forgot-password").addEventListener("click", async () => {
+  $("#login-error").textContent = "";
+  try {
+    await window.firebaseResetPassword();
+    toast("Password reset link sent to " + window.SUPER_ADMIN_EMAIL);
+  } catch (err) { $("#login-error").textContent = err.message; }
+});
 
 $("#logout").addEventListener("click", () => window.firebaseLogout());
 
-// ---------- change login number ----------
-function resetChangeForm() {
+// ---------- change password ----------
+$("#change-password").addEventListener("click", () => {
   const f = $("#change-form");
   f.reset();
-  f.mobile.disabled = false;
-  f.otp.hidden = true; f.otp.required = false;
-  $("#change-button").textContent = "Send OTP";
   $("#change-error").textContent = "";
-}
-
-$("#change-number").addEventListener("click", () => {
-  resetChangeForm();
   $("#change-dialog").showModal();
-  $("#change-form").mobile.focus();
+  f.current.focus();
 });
 $("#change-cancel").addEventListener("click", () => $("#change-dialog").close());
 
@@ -636,21 +604,15 @@ $("#change-form").addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target, button = $("#change-button");
   $("#change-error").textContent = "";
+  if (f.next.value !== f.confirm.value) return ($("#change-error").textContent = "The new passwords do not match");
+  if (f.next.value === f.current.value) return ($("#change-error").textContent = "The new password must be different");
   button.disabled = true;
   try {
-    if (f.otp.hidden) {
-      await window.firebaseSendChangeOtp(f.mobile.value);
-      f.mobile.disabled = true;
-      f.otp.hidden = false; f.otp.required = true; f.otp.focus();
-      button.textContent = "Change number";
-    } else {
-      const phone = await window.firebaseConfirmChange(f.otp.value.trim());
-      $("#change-dialog").close();
-      toast("Login number changed to " + phone);
-    }
+    await window.firebaseChangePassword(f.current.value, f.next.value);
+    $("#change-dialog").close();
+    toast("Password changed");
   } catch (err) {
     $("#change-error").textContent = err.message;
-    f.otp.value = "";
   } finally {
     button.disabled = false;
   }
@@ -669,14 +631,18 @@ const firebaseConfig = {
 };
 // Firestore database to use: "(default)" unless you created a named database in Firestore.
 const FIRESTORE_DATABASE = "(default)";
+// The root Super Admin login (username). Keep it the same as in firestore.rules.
+// The password is never stored here: it lives only in Firebase Authentication.
+const SUPER_ADMIN_EMAIL = "vishalsaxen@gmail.com";
+window.SUPER_ADMIN_EMAIL = SUPER_ADMIN_EMAIL;
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithPhoneNumber, RecaptchaVerifier, signOut,
-  PhoneAuthProvider, updatePhoneNumber,
+  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  EmailAuthProvider, reauthenticateWithCredential, updatePassword, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc, setDoc,
+  getFirestore, connectFirestoreEmulator, collection, doc, getDoc, getDocs, addDoc, updateDoc,
   query, where, orderBy, limit, writeBatch, runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -902,114 +868,42 @@ window.firebaseApi = async (method, path, body = {}) => {
   }
 };
 
-// Accepts 9665121212, 96651 21212, 09665121212 or +91 9665121212.
-const toIndianE164 = value => {
-  const digits = String(value).replace(/\D/g, "").replace(/^(91|0)(?=\d{10}$)/, "");
-  return digits.length === 10 ? "+91" + digits : null;
-};
+const isSuperAdmin = email => String(email || "").trim().toLowerCase() === SUPER_ADMIN_EMAIL;
 
-const sha256 = async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))]
-  .map(b => b.toString(16).padStart(2, "0")).join("");
-const ADMIN_REF = doc(db, "settings", "admin");  // { uid, phoneHash } of the Super Admin login
-
-let recaptcha = null, pendingOtp = null, pendingChange = null;
-
-// A fresh invisible reCAPTCHA for every OTP request (Firebase requires one before sending an SMS).
-const verifier = () => {
-  recaptcha?.clear();
-  const box = document.createElement("div");
-  $("#recaptcha").replaceChildren(box);
-  return (recaptcha = new RecaptchaVerifier(auth, box, { size: "invisible" }));
-};
-const otpError = err => {
-  recaptcha?.clear(); recaptcha = null;
-  if (err.code === "auth/too-many-requests") return new Error("Too many attempts. Try again later.");
-  if (err.code === "auth/invalid-phone-number") return new Error("Enter a 10-digit mobile number");
-  return new Error("Could not send the OTP: " + friendly(err));
-};
-
-let enrollName = "";
-
-window.firebaseAdminEnrolled = async () => (await getDoc(ADMIN_REF)).exists();
-
-window.firebaseSendOtp = async (mobile, name) => {
-  const phone = toIndianE164(mobile);
-  if (!phone) throw new Error("Enter a 10-digit mobile number");
-  const admin = await getDoc(ADMIN_REF);
-  if (admin.exists()) {
-    // Only the Super Admin number may log in, so don't spend an SMS on any other number.
-    if (admin.data().phoneHash !== await sha256(phone)) throw new Error("This mobile number is not the Super Admin.");
-  } else if (!name) {
-    throw Object.assign(new Error("Enter your name to enroll as Super Admin"), { enroll: true });
-  }
-  enrollName = admin.exists() ? "" : name;
+window.firebaseLogin = async (email, password) => {
+  if (!isSuperAdmin(email)) throw new Error("Wrong username or password");
   try {
-    pendingOtp = await signInWithPhoneNumber(auth, phone, verifier());
+    await signInWithEmailAndPassword(auth, SUPER_ADMIN_EMAIL, password);
   } catch (err) {
-    throw otpError(err);
-  }
-  return { enroll: !admin.exists() };
-};
-
-window.firebaseSendChangeOtp = async mobile => {
-  const phone = toIndianE164(mobile);
-  if (!phone) throw new Error("Enter a 10-digit mobile number");
-  if (phone === auth.currentUser?.phoneNumber) throw new Error("That is already the login number.");
-  try {
-    pendingChange = { phone, verificationId: await new PhoneAuthProvider(auth).verifyPhoneNumber(phone, verifier()) };
-  } catch (err) {
-    throw otpError(err);
-  }
-};
-
-window.firebaseConfirmChange = async code => {
-  if (!pendingChange) throw new Error("Send the OTP first");
-  if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit OTP");
-  const user = auth.currentUser;
-  try {
-    await updatePhoneNumber(user, PhoneAuthProvider.credential(pendingChange.verificationId, code));
-  } catch (err) {
-    if (err.code === "auth/invalid-verification-code") throw new Error("Wrong OTP. Check the SMS and try again.");
-    if (err.code === "auth/code-expired") throw new Error("The OTP has expired. Send a new one.");
-    if (err.code === "auth/credential-already-in-use" || err.code === "auth/account-exists-with-different-credential") {
-      throw new Error("That number is already used by another login.");
+    if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-email", "auth/invalid-login-credentials"].includes(err.code)) {
+      throw new Error("Wrong username or password");
     }
-    if (err.code === "auth/requires-recent-login") throw new Error("Please log out and log in again, then change the number.");
+    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again in a few minutes, or use Forgot password.");
     throw new Error(friendly(err));
   }
-  await user.getIdToken(true);  // the new token carries the new number, which the rules check
-  await saveAdmin(user, (await getDoc(ADMIN_REF)).data()?.name);
-  const phone = pendingChange.phone;
-  pendingChange = null;
-  return phone;
 };
 
-// Records (or refreshes) this login as the Super Admin. The rules only allow the first login with the
-// starting number, or the same login after it verified a new number.
-async function saveAdmin(user, name) {
-  await setDoc(ADMIN_REF, { uid: user.uid, phoneHash: await sha256(user.phoneNumber), name: name || "" });
-}
-
-async function ensureAdmin(user) {
-  const admin = await getDoc(ADMIN_REF);
-  const hash = await sha256(user.phoneNumber || "");
-  if (!admin.exists()) {
-    await saveAdmin(user, enrollName);  // enrollment: this login becomes the Super Admin
-  } else if (admin.data().uid === user.uid && admin.data().phoneHash !== hash) {
-    await saveAdmin(user, admin.data().name);  // finishing a number change that was interrupted
-  }
-  enrollName = "";
-}
-
-window.firebaseVerifyOtp = async code => {
-  if (!pendingOtp) throw new Error("Send the OTP first");
-  if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit OTP");
+window.firebaseResetPassword = async () => {
   try {
-    await pendingOtp.confirm(code);
-    pendingOtp = null;
+    await sendPasswordResetEmail(auth, SUPER_ADMIN_EMAIL);
   } catch (err) {
-    if (err.code === "auth/invalid-verification-code") throw new Error("Wrong OTP. Check the SMS and try again.");
-    if (err.code === "auth/code-expired") throw new Error("The OTP has expired. Send a new one.");
+    throw new Error("Could not send the reset link: " + friendly(err));
+  }
+};
+
+window.firebaseChangePassword = async (current, next) => {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Please log in again");
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, current));
+  } catch (err) {
+    if (err.code === "auth/too-many-requests") throw new Error("Too many attempts. Try again in a few minutes.");
+    throw new Error("The current password is wrong");
+  }
+  try {
+    await updatePassword(user, next);
+  } catch (err) {
+    if (err.code === "auth/weak-password") throw new Error("Choose a stronger new password (at least 8 characters)");
     throw new Error(friendly(err));
   }
 };
@@ -1017,13 +911,8 @@ window.firebaseVerifyOtp = async code => {
 window.firebaseLogout = () => signOut(auth);
 
 onAuthStateChanged(auth, async user => {
-  if (!user) {
-    lock();
-    window.firebaseAdminEnrolled().then(enrolled => setEnrollMode(!enrolled)).catch(() => {});
-    return;
-  }
+  if (!user) return lock();
   try {
-    await ensureAdmin(user);
     await seedIfEmpty();
     unlock();
   } catch (err) {
