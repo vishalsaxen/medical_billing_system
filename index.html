@@ -191,7 +191,8 @@
       <form class="row" id="form-customer">
         <input type="hidden" name="id">
         <input name="name" placeholder="Customer / hospital name" required>
-        <input name="phone" type="tel" placeholder="Mobile" maxlength="15">
+        <select name="phone_country" aria-label="Mobile country" style="flex:0 0 140px"></select>
+        <input name="phone" type="tel" inputmode="numeric" placeholder="Mobile (digits only)" maxlength="14">
         <input name="email" type="email" placeholder="Email">
         <input name="gstin" placeholder="GST No." maxlength="15" style="text-transform:uppercase">
         <input name="address" placeholder="Address" style="flex-basis:260px">
@@ -230,7 +231,8 @@
         <form class="row" id="bill-customer" onsubmit="return false">
           <select name="customer_id" aria-label="Customer" style="flex-basis:100%"></select>
           <input name="customer_name" placeholder="Customer name">
-          <input name="customer_phone" type="tel" placeholder="Mobile" maxlength="15">
+          <select name="customer_phone_country" aria-label="Mobile country" style="flex:0 0 140px"></select>
+          <input name="customer_phone" type="tel" inputmode="numeric" placeholder="Mobile (digits only)" maxlength="14">
           <input name="customer_email" type="email" placeholder="Email">
         </form>
         <div class="table-wrap"><table>
@@ -307,21 +309,103 @@ const money = n => Number(n || 0).toFixed(2);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ---------- validation (shared with the Firebase module below) ----------
-// Indian mobile: 10 digits starting 6-9, optionally written with +91 or a leading 0.
-function normalizePhone(value) {
+// ----- mobile numbers -----
+// Pick the country from the dropdown and type the mobile number in digits only.
+// India and USA numbers are 10 digits; UAE, Saudi and Australia accept the 10-digit local form (with the leading 0)
+// or the 9 digits without it. Europe has many countries, so type the country code and number together.
+const PHONE_COUNTRIES = {
+  IN: { label: "IN +91", code: "91", re: /^[6-9]\d{9}$/, hint: "10 digits starting with 6, 7, 8 or 9" },
+  AE: { label: "UAE +971", code: "971", re: /^5\d{8}$/, trunk: true, hint: "10 digits starting with 05 (e.g. 0501234567)" },
+  EU: { label: "EUROPE +", code: "", re: /^[34]\d{8,13}$/, hint: "country code and number, e.g. 447911123456 for UK" },
+  US: { label: "USA +1", code: "1", re: /^[2-9]\d{2}[2-9]\d{6}$/, hint: "10 digits (area code + number)" },
+  AU: { label: "AUSTRALIA +61", code: "61", re: /^4\d{8}$/, trunk: true, hint: "10 digits starting with 04 (e.g. 0412345678)" },
+  SA: { label: "SAUDI +966", code: "966", re: /^5\d{8}$/, trunk: true, hint: "10 digits starting with 05 (e.g. 0512345678)" },
+};
+const phoneOptions = selected => Object.entries(PHONE_COUNTRIES)
+  .map(([k, c]) => `<option value="${k}" ${k === selected ? "selected" : ""}>${c.label}</option>`).join("");
+
+// Returns the number as stored, e.g. "+91 9876543210" (Europe: "+447911123456"), or "" when empty.
+function normalizePhone(value, country = "IN") {
+  const c = PHONE_COUNTRIES[country] || PHONE_COUNTRIES.IN;
   const raw = String(value || "").trim();
   if (!raw) return "";
-  const digits = raw.replace(/[\s-]/g, "").replace(/^(\+91|0091|91(?=\d{10}$)|0(?=\d{10}$))/, "");
-  if (!/^[6-9]\d{9}$/.test(digits)) throw new Error("Enter a valid 10-digit Indian mobile number (starting with 6, 7, 8 or 9)");
-  return digits;
+  if (!/^[\d\s-]+$/.test(raw)) throw new Error("Mobile number must contain digits only");
+  let digits = raw.replace(/\D/g, "");
+  if (c.trunk && /^0\d{9}$/.test(digits)) digits = digits.slice(1);
+  if (!c.re.test(digits)) throw new Error(`Enter a valid ${c.label.replace(/ \+.*/, "")} mobile number: ${c.hint}`);
+  return c.code ? `+${c.code} ${digits}` : `+${digits}`;
 }
 
+// Splits a stored number back into [country, digits] for the form. Old numbers without a code are Indian.
+function splitPhone(stored) {
+  const s = String(stored || "").replace(/\s/g, "");
+  if (!s) return ["IN", ""];
+  if (!s.startsWith("+")) return ["IN", s];
+  const hit = Object.entries(PHONE_COUNTRIES).filter(([, c]) => c.code).sort((a, b) => b[1].code.length - a[1].code.length)
+    .find(([, c]) => s.startsWith("+" + c.code));
+  return hit ? [hit[0], s.slice(1 + hit[1].code.length)] : ["EU", s.slice(1)];
+}
+
+// ----- email -----
+// Throwaway inbox services (checked against the domain and its parent domains).
+const DISPOSABLE_DOMAINS = new Set(("mailinator.com yopmail.com yopmail.fr yopmail.net guerrillamail.com guerrillamail.net guerrillamail.org " +
+  "guerrillamailblock.com sharklasers.com grr.la 10minutemail.com 10minutemail.net 10minutemail.co.uk tempmail.com temp-mail.org " +
+  "temp-mail.io tempmail.net tempmailo.com tempr.email throwawaymail.com trashmail.com trashmail.de trashmail.net getnada.com nada.email " +
+  "dispostable.com maildrop.cc mailnesia.com mintemail.com mohmal.com moakt.com emailondeck.com fakeinbox.com fakemail.net " +
+  "spamgourmet.com mytemp.email tempinbox.com discard.email mailcatch.com inboxkitten.com burnermail.io 33mail.com spambox.us " +
+  "mail-temp.com tmail.ws tmpmail.org tmpmail.net emailfake.com fakemailgenerator.com crazymailing.com mailpoof.com " +
+  "dropmail.me 1secmail.com 1secmail.net 1secmail.org harakirimail.com mailsac.com tempail.com luxusmail.org").split(/\s+/));
+// Shared mailboxes rather than a person: allowed, but flagged.
+const ROLE_ADDRESSES = new Set(("info support admin administrator sales accounts account billing contact contactus office help " +
+  "helpdesk hr jobs careers enquiry enquiries inquiry marketing noreply no-reply donotreply postmaster webmaster hostmaster " +
+  "abuse security team hello mail service services orders purchase reception").split(/\s+/));
+
+// Syntax: one "@", a local part without spaces or misplaced dots, and a real-looking domain ending in a letter TLD.
 function normalizeEmail(value) {
   const email = String(value || "").trim().toLowerCase();
-  if (email && !/^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(email)) {
-    throw new Error("Enter a valid email address, like name@example.com");
-  }
+  if (!email) return "";
+  const bad = msg => { throw new Error("Email: " + msg); };
+  if (/\s/.test(email)) bad("remove the spaces");
+  const parts = email.split("@");
+  if (parts.length !== 2) bad("must contain exactly one @, like name@example.com");
+  const [local, domain] = parts;
+  if (!local || local.length > 64) bad("the part before @ is missing or too long");
+  if (!/^[a-z0-9!#$%&'*+/=?^_`{|}~.-]+$/.test(local)) bad("the part before @ has characters that are not allowed");
+  if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) bad("a dot cannot start or end the name, or appear twice in a row");
+  if (!domain || domain.length > 253) bad("the domain after @ is missing");
+  const labels = domain.split(".");
+  if (labels.length < 2) bad("the domain needs an ending like .com, .in or .org");
+  if (labels.some(l => !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) bad("the domain after @ is not valid");
+  if (!/^[a-z]{2,24}$/.test(labels[labels.length - 1])) bad("the domain ending (like .com) is not valid");
+  if (labels.some((_, i) => DISPOSABLE_DOMAINS.has(labels.slice(i).join(".")))) bad(`${domain} is a temporary (throwaway) email service. Please use a real address`);
   return email;
+}
+
+const isRoleAddress = email => ROLE_ADDRESSES.has(String(email).split("@")[0].split("+")[0]);
+
+// Mail server check: looks up the domain's MX records over DNS-over-HTTPS (Google Public DNS).
+// If the lookup itself can't be reached, the email is accepted rather than blocking the work.
+const mxCache = new Map();
+async function checkEmailDomain(email) {
+  if (!email) return;
+  const domain = email.split("@")[1];
+  if (!mxCache.has(domain)) {
+    mxCache.set(domain, (async () => {
+      try {
+        const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`, { headers: { accept: "application/dns-json" } });
+        if (!res.ok) return "unknown";
+        const data = await res.json();
+        if (data.Status === 3) return "no-domain";
+        const mx = (data.Answer || []).filter(a => a.type === 15);
+        if (!mx.length || mx.every(a => /^0\s+\.?$/.test(a.data))) return "no-mx";
+        return "ok";
+      } catch { return "unknown"; }
+    })());
+  }
+  const result = await mxCache.get(domain);
+  if (result === "unknown") mxCache.delete(domain);  // try again next time
+  if (result === "no-domain") throw new Error(`Email: the domain ${domain} does not exist`);
+  if (result === "no-mx") throw new Error(`Email: ${domain} is not set up to receive email (no MX record)`);
 }
 
 // GSTIN: 2-digit state code + 10-character PAN + entity number (1-9, A-Z) + "Z" + check character.
@@ -532,7 +616,7 @@ function bindForm(formId, resource, fields) {
 }
 bindForm("#form-main", "main-categories", ["name"]);
 bindForm("#form-sub", "sub-categories", ["main_category_id", "name"]);
-bindForm("#form-customer", "customers", ["name", "phone", "email", "gstin", "address"]);
+bindForm("#form-customer", "customers", ["name", "phone_country", "phone", "email", "gstin", "address"]);
 
 async function removeItem(resource, id, alsoDeletes) {
   if (!confirm("Delete this entry" + (alsoDeletes ? " and " + alsoDeletes : "") + "?")) return;
@@ -564,29 +648,53 @@ function renderCustomers() {
 
 function editCustomer(id) {
   const c = state.customers.find(x => x.id === id), f = $("#form-customer");
-  for (const k of ["id", "name", "phone", "email", "gstin", "address"]) f[k].value = c[k] || "";
+  for (const k of ["id", "name", "email", "gstin", "address"]) f[k].value = c[k] || "";
+  [f.phone_country.value, f.phone.value] = splitPhone(c.phone);
   f.name.focus();
 }
 
 $("#customer-search").addEventListener("input", renderCustomers);
 
-// Show the problem as soon as a field is left, not only on Save.
-for (const [field, check] of [["phone", normalizePhone], ["email", normalizeEmail], ["gstin", normalizeGstin]]) {
-  for (const form of ["#form-customer", "#bill-customer"]) {
-    const input = $(form).elements[form === "#bill-customer" ? "customer_" + field : field];
-    if (!input) continue;
-    input.addEventListener("blur", () => {
-      try { check(input.value); input.setCustomValidity(""); input.classList.remove("invalid"); }
-      catch (err) { input.setCustomValidity(err.message); input.classList.add("invalid"); toast(err.message, true); }
-    });
-    input.addEventListener("input", () => { input.setCustomValidity(""); input.classList.remove("invalid"); });
+// ----- live field checks: show the problem as soon as a field is left, not only on Save -----
+function markField(input, err) {
+  input.setCustomValidity(err ? err.message : "");
+  input.classList.toggle("invalid", !!err);
+  if (err) toast(err.message, true);
+}
+
+for (const [formSel, prefix] of [["#form-customer", ""], ["#bill-customer", "customer_"]]) {
+  const f = $(formSel), phone = f.elements[prefix + "phone"], country = f.elements[prefix + "phone_country"];
+  const email = f.elements[prefix + "email"], gstin = f.elements[prefix + "gstin"];
+  country.innerHTML = phoneOptions("IN");
+  // Digits only: anything else is dropped as it is typed or pasted.
+  phone.addEventListener("input", () => { phone.value = phone.value.replace(/\D/g, ""); markField(phone, null); });
+  const checkPhone = () => { try { normalizePhone(phone.value, country.value); markField(phone, null); } catch (e) { markField(phone, e); } };
+  phone.addEventListener("blur", checkPhone);
+  country.addEventListener("change", () => { if (phone.value) checkPhone(); phone.placeholder = "Mobile: " + PHONE_COUNTRIES[country.value].hint; });
+  email.addEventListener("input", () => markField(email, null));
+  email.addEventListener("blur", async () => {
+    try {
+      const value = normalizeEmail(email.value);
+      if (!value) return markField(email, null);
+      await checkEmailDomain(value);
+      markField(email, null);
+      if (isRoleAddress(value)) toast(`Note: ${value} is a shared/role address (like info@ or accounts@), not a person's own inbox`);
+    } catch (e) { markField(email, e); }
+  });
+  if (gstin) {
+    gstin.addEventListener("input", () => markField(gstin, null));
+    gstin.addEventListener("blur", () => { try { normalizeGstin(gstin.value); markField(gstin, null); } catch (e) { markField(gstin, e); } });
   }
+  f.addEventListener("reset", () => setTimeout(() => {
+    [phone, email, gstin].filter(Boolean).forEach(i => markField(i, null));
+    country.value = "IN";
+  }));
 }
 
 $("#bill-customer").customer_id.addEventListener("change", e => {
   const c = state.customers.find(x => x.id === e.target.value), f = $("#bill-customer");
   f.customer_name.value = c ? c.name : "";
-  f.customer_phone.value = c ? c.phone || "" : "";
+  [f.customer_phone_country.value, f.customer_phone.value] = c ? splitPhone(c.phone) : ["IN", ""];
   f.customer_email.value = c ? c.email || "" : "";
 });
 
@@ -658,7 +766,7 @@ $("#bill-save").addEventListener("click", async () => {
   const c = $("#bill-customer");
   try {
     const saved = await api("POST", "sales", {
-      customer_id: c.customer_id.value, customer_name: c.customer_name.value, customer_phone: c.customer_phone.value, customer_email: c.customer_email.value,
+      customer_id: c.customer_id.value, customer_name: c.customer_name.value, customer_phone: c.customer_phone.value, customer_phone_country: c.customer_phone_country.value, customer_email: c.customer_email.value,
       items: state.bill.map(l => ({ product_id: l.product_id, qty: l.qty, price: l.price })),
     });
     toast("Bill " + saved.bill_no + " saved");
@@ -1047,11 +1155,13 @@ const routes = {
   },
   async "POST customers"(_id, b) {
     const data = customerData(b);
+    await checkEmailDomain(data.email);
     await assertUnique(CUSTOMERS, "name", data.name, data.phone ? ["phone", data.phone] : null);
     return { id: (await addDoc(collection(db, CUSTOMERS), data)).id };
   },
   async "PUT customers"(id, b) {
     const data = customerData(b);
+    await checkEmailDomain(data.email);
     await assertUnique(CUSTOMERS, "name", data.name, data.phone ? ["phone", data.phone] : null, id);
     await updateDoc(doc(db, CUSTOMERS, id), data);
     return { id };
@@ -1087,7 +1197,8 @@ const routes = {
       return { product_id: p.id, name: p.name, unit: p.unit, mrp, qty, price, amount: Math.round(qty * price * 100) / 100 };
     });
     const total = Math.round(items.reduce((s, it) => s + it.amount, 0) * 100) / 100;
-    const customer_phone = normalizePhone(b.customer_phone), customer_email = normalizeEmail(b.customer_email);
+    const customer_phone = normalizePhone(b.customer_phone, b.customer_phone_country), customer_email = normalizeEmail(b.customer_email);
+    await checkEmailDomain(customer_email);
     let customer = null;
     if (b.customer_id) {
       const snap = await getDoc(doc(db, CUSTOMERS, b.customer_id));
@@ -1118,7 +1229,7 @@ const routes = {
 function customerData(b) {
   const name = text(b.name, "Customer name");
   return {
-    name, nameKey: name.toLowerCase(), phone: normalizePhone(b.phone), gstin: normalizeGstin(b.gstin),
+    name, nameKey: name.toLowerCase(), phone: normalizePhone(b.phone, b.phone_country), gstin: normalizeGstin(b.gstin),
     email: normalizeEmail(b.email), address: String(b.address || "").trim(),
   };
 }
