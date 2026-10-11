@@ -9,8 +9,10 @@ There is no server to run.
 - **Product List** – a price list of every Main Category and Sub Category (15 and 76 to start), where you add products and type
   their **MRP** and **S.P.** (S.P. can't exceed MRP). Below it, add, rename or delete categories.
 - **Customer Details** – add, edit and delete customers (name, mobile, email, GST No., address). They can be picked
-  on the Sale and Purchase tabs.
-- **1. Sale** – pick a saved customer (or type a walk-in name), browse/search items with prices, add them to a bill, save and print it. Recent bills are listed below.
+  on the Sale and Purchase tabs. Mobile must be a 10-digit Indian number (6-9 first), email must be well formed, and
+  GST No. is checked for state code, PAN, entity number, the fixed `Z` and the check digit.
+- **1. Sale** – pick a saved customer (or type a walk-in name), browse/search items with prices, add them to a bill, save and print it (the print shows the customer's name, mobile, email, address and GST No.).
+  **Daily Report** lists every bill line for a chosen date and downloads it as Excel (.xlsx), CSV or PDF. Recent bills are listed below.
 - **2. Purchase** – choose the customer to purchase from; purchase entry comes next.
 
 ## One-time Firebase setup
@@ -50,5 +52,5 @@ Firebase login does not work from a `file://` page, so open it over http:
 | `subCategories`  | `mainCategoryId`, `name`, `nameKey` |
 | `products`       | `subCategoryId`, `name`, `nameKey`, `unit`, `mrp`, `sellingPrice` |
 | `customers`      | `name`, `nameKey`, `phone`, `email`, `gstin`, `address` |
-| `sales`          | `number`, `bill_no`, `bill_date`, `customer_id`, `customer_name`, `customer_phone`, `customer_address`, `customer_gstin`, `items[]`, `total` |
+| `sales`          | `number`, `bill_no`, `bill_date`, `customer_id`, `customer_name`, `customer_phone`, `customer_email`, `customer_address`, `customer_gstin`, `items[]`, `total` |
 | `counters/sales` | `last` (last bill number used) |

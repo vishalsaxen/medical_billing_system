@@ -41,6 +41,7 @@
   button.btn { padding: 8px 14px; border: 0; border-radius: 5px; background: var(--brand); color: #fff; cursor: pointer; font-size: 14px; }
   button.btn:hover { background: var(--brand-dark); }
   button.btn:disabled { opacity: .45; cursor: default; }
+  input.invalid { border-color: var(--danger); background: #fff5f5; }
   button.btn.secondary { background: #f3e6dc; color: var(--text); }
   header.shop { position: relative; }
   .header-actions { position: absolute; top: 12px; right: 16px; display: flex; gap: 6px; }
@@ -229,7 +230,8 @@
         <form class="row" id="bill-customer" onsubmit="return false">
           <select name="customer_id" aria-label="Customer" style="flex-basis:100%"></select>
           <input name="customer_name" placeholder="Customer name">
-          <input name="customer_phone" placeholder="Mobile">
+          <input name="customer_phone" type="tel" placeholder="Mobile" maxlength="15">
+          <input name="customer_email" type="email" placeholder="Email">
         </form>
         <div class="table-wrap"><table>
           <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th class="num">Amount</th><th></th></tr></thead>
@@ -241,6 +243,22 @@
           <button class="btn" id="bill-save">Save &amp; Print</button>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h3>Daily Report</h3>
+      <div class="price-tools">
+        <input type="date" id="report-date" aria-label="Report date" style="flex:0 0 180px">
+        <button class="btn secondary" type="button" id="report-show">Show</button>
+        <button class="btn" type="button" data-report="xlsx">Download Excel</button>
+        <button class="btn" type="button" data-report="csv">Download CSV</button>
+        <button class="btn" type="button" data-report="pdf">Download PDF</button>
+      </div>
+      <p id="report-summary" class="empty" style="text-align:left;padding:0 0 8px"></p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Bill No</th><th>Time</th><th>Customer</th><th>Mobile</th><th>Email</th><th>Item</th><th class="num">MRP</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+        <tbody id="report-rows"></tbody>
+      </table></div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -287,6 +305,47 @@ const state = { mains: [], subs: [], products: [], customers: [], bill: [] };
 const $ = (sel, root = document) => root.querySelector(sel);
 const money = n => Number(n || 0).toFixed(2);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ---------- validation (shared with the Firebase module below) ----------
+// Indian mobile: 10 digits starting 6-9, optionally written with +91 or a leading 0.
+function normalizePhone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/[\s-]/g, "").replace(/^(\+91|0091|91(?=\d{10}$)|0(?=\d{10}$))/, "");
+  if (!/^[6-9]\d{9}$/.test(digits)) throw new Error("Enter a valid 10-digit Indian mobile number (starting with 6, 7, 8 or 9)");
+  return digits;
+}
+
+function normalizeEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  if (email && !/^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(email)) {
+    throw new Error("Enter a valid email address, like name@example.com");
+  }
+  return email;
+}
+
+// GSTIN: 2-digit state code + 10-character PAN + entity number (1-9, A-Z) + "Z" + check character.
+const GST_STATE_CODES = new Set([...Array.from({ length: 38 }, (_, i) => String(i + 1).padStart(2, "0")), "97", "99"]);
+const GST_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function gstCheckChar(first14) {
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const v = GST_CHARS.indexOf(first14[i]) * (i % 2 ? 2 : 1);
+    sum += Math.floor(v / 36) + (v % 36);
+  }
+  return GST_CHARS[(36 - (sum % 36)) % 36];
+}
+function normalizeGstin(value) {
+  const g = String(value || "").replace(/\s/g, "").toUpperCase();
+  if (!g) return "";
+  if (g.length !== 15) throw new Error("GST No. must be exactly 15 characters, like 27ACIFM1626L1ZZ");
+  if (!GST_STATE_CODES.has(g.slice(0, 2))) throw new Error("GST No.: the first 2 digits must be a valid state code (01-38, e.g. 27 for Maharashtra)");
+  if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(g.slice(2, 12))) throw new Error("GST No.: characters 3-12 must be a valid PAN (5 letters, 4 digits, 1 letter)");
+  if (!/^[1-9A-Z]$/.test(g[12])) throw new Error("GST No.: character 13 must be 1-9 or A-Z");
+  if (g[13] !== "Z") throw new Error("GST No.: character 14 must be the letter Z");
+  if (gstCheckChar(g) !== g[14]) throw new Error("GST No. check digit does not match. Please re-check the number for typing errors");
+  return g;
+}
 
 function toast(msg, isError) {
   const t = $("#toast");
@@ -511,10 +570,24 @@ function editCustomer(id) {
 
 $("#customer-search").addEventListener("input", renderCustomers);
 
+// Show the problem as soon as a field is left, not only on Save.
+for (const [field, check] of [["phone", normalizePhone], ["email", normalizeEmail], ["gstin", normalizeGstin]]) {
+  for (const form of ["#form-customer", "#bill-customer"]) {
+    const input = $(form).elements[form === "#bill-customer" ? "customer_" + field : field];
+    if (!input) continue;
+    input.addEventListener("blur", () => {
+      try { check(input.value); input.setCustomValidity(""); input.classList.remove("invalid"); }
+      catch (err) { input.setCustomValidity(err.message); input.classList.add("invalid"); toast(err.message, true); }
+    });
+    input.addEventListener("input", () => { input.setCustomValidity(""); input.classList.remove("invalid"); });
+  }
+}
+
 $("#bill-customer").customer_id.addEventListener("change", e => {
   const c = state.customers.find(x => x.id === e.target.value), f = $("#bill-customer");
   f.customer_name.value = c ? c.name : "";
   f.customer_phone.value = c ? c.phone || "" : "";
+  f.customer_email.value = c ? c.email || "" : "";
 });
 
 function showPurchaseParty() {
@@ -585,12 +658,13 @@ $("#bill-save").addEventListener("click", async () => {
   const c = $("#bill-customer");
   try {
     const saved = await api("POST", "sales", {
-      customer_id: c.customer_id.value, customer_name: c.customer_name.value, customer_phone: c.customer_phone.value,
+      customer_id: c.customer_id.value, customer_name: c.customer_name.value, customer_phone: c.customer_phone.value, customer_email: c.customer_email.value,
       items: state.bill.map(l => ({ product_id: l.product_id, qty: l.qty, price: l.price })),
     });
     toast("Bill " + saved.bill_no + " saved");
     state.bill = []; c.reset(); renderBill();
     await loadSales();
+    loadReport();
     printBill(saved.id);
   } catch (err) { toast(err.message, true); }
 });
@@ -615,7 +689,7 @@ async function printBill(id) {
       <p>GST No. 27ACIFM1626L1ZZ | Mobile: 9665 12 12 12 / 8669 56 42 42</p>
     </div>
     <div class="meta"><span><b>Bill No:</b> ${esc(s.bill_no)}</span><span><b>Date:</b> ${esc(s.bill_date)}</span></div>
-    <div class="meta"><span><b>Customer:</b> ${esc(s.customer_name) || "-"}</span><span><b>Mobile:</b> ${esc(s.customer_phone) || "-"}</span></div>
+    <div class="meta"><span><b>Customer:</b> ${esc(s.customer_name) || "-"}</span><span><b>Mobile:</b> ${esc(s.customer_phone) || "-"}</span><span><b>Email:</b> ${esc(s.customer_email) || "-"}</span></div>
     ${s.customer_address || s.customer_gstin ? `<div class="meta"><span>${esc(s.customer_address)}</span><span>${s.customer_gstin ? "<b>GST No.:</b> " + esc(s.customer_gstin) : ""}</span></div>` : ""}
     <table><thead><tr><th>#</th><th>Item</th><th>Unit</th><th class="num">MRP</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
     <tbody>${s.items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}</td><td>${esc(it.unit)}</td>
@@ -623,6 +697,95 @@ async function printBill(id) {
     <tfoot><tr><th colspan="6" class="num">Total ₹</th><th class="num">${money(s.total)}</th></tr></tfoot></table>`;
   window.print();
 }
+
+// ---------- daily report ----------
+const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const REPORT_COLUMNS = ["Bill No", "Date", "Time", "Customer", "Mobile", "Email", "GST No.", "Item", "Unit", "MRP", "Qty", "Rate", "Amount"];
+let report = { date: "", sales: [] };
+
+function reportRows() {
+  return report.sales.flatMap(s => s.items.map(it => [
+    s.bill_no, s.bill_date.slice(0, 10), s.bill_date.slice(11), s.customer_name || "", s.customer_phone || "",
+    s.customer_email || "", s.customer_gstin || "", it.name, it.unit || "", it.mrp ?? "", it.qty, it.price, it.amount,
+  ]));
+}
+const reportTotal = () => report.sales.reduce((t, s) => t + s.total, 0);
+
+async function loadReport() {
+  const date = $("#report-date").value || today();
+  $("#report-date").value = date;
+  try {
+    report = { date, sales: await api("GET", "sales-by-date/" + date) };
+  } catch (err) { return toast(err.message, true); }
+  const rows = reportRows();
+  $("#report-summary").textContent = `${date}: ${report.sales.length} bill(s), ${rows.length} item line(s), total ₹ ${money(reportTotal())}`;
+  $("#report-rows").innerHTML = rows.length ? rows.map(r => `<tr><td>${esc(r[0])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td>
+      <td>${esc(r[5])}</td><td>${esc(r[7])}</td><td class="num">${r[9] === "" ? "-" : money(r[9])}</td><td class="num">${r[10]}</td>
+      <td class="num">${money(r[11])}</td><td class="num">${money(r[12])}</td></tr>`).join("")
+    : `<tr><td colspan="10" class="empty">No bills on ${esc(date)}</td></tr>`;
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const el = document.createElement("script");
+    el.src = src; el.onload = resolve; el.onerror = () => reject(new Error("Could not load the download library. Check the internet connection."));
+    document.head.appendChild(el);
+  });
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+const SHOP = ["MATOSHREE Surgical & Distributor",
+  "1344, Sadashiv Peth, Bharat Natya Mandir Road, Near Chimnya Ganapati, Opp. Godbole Hospital, Pune - 411030",
+  "GST No. 27ACIFM1626L1ZZ | Mobile: 9665 12 12 12 / 8669 56 42 42"];
+
+async function downloadReport(kind) {
+  if (report.date !== ($("#report-date").value || today())) await loadReport();
+  const rows = reportRows(), name = `MATOSHREE-daily-report-${report.date}`;
+  const totalRow = ["", "", "", "", "", "", "", "TOTAL", "", "", "", "", Math.round(reportTotal() * 100) / 100];
+  if (kind === "csv") {
+    const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+    const csv = [REPORT_COLUMNS, ...rows, totalRow].map(r => r.map(cell).join(",")).join("\r\n");
+    return saveBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), name + ".csv");
+  }
+  if (kind === "xlsx") {
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
+    const sheet = XLSX.utils.aoa_to_sheet([[SHOP[0]], [`Daily Report: ${report.date}`], [], REPORT_COLUMNS, ...rows, totalRow]);
+    sheet["!cols"] = REPORT_COLUMNS.map(c => ({ wch: ["Customer", "Item", "Email"].includes(c) ? 24 : 12 }));
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, "Daily Report");
+    return XLSX.writeFile(book, name + ".xlsx");
+  }
+  await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js");
+  const pdf = new window.jspdf.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  pdf.setFontSize(14); pdf.text(SHOP[0], 40, 40);
+  pdf.setFontSize(9); pdf.text(SHOP[1], 40, 56); pdf.text(SHOP[2], 40, 68);
+  pdf.setFontSize(11); pdf.text(`Daily Report: ${report.date}  |  Bills: ${report.sales.length}  |  Total: Rs. ${money(reportTotal())}`, 40, 90);
+  const pdfCols = ["Bill No", "Time", "Customer", "Mobile", "Email", "Item", "MRP", "Qty", "Rate", "Amount"];
+  const pick = r => [r[0], r[2], r[3], r[4], r[5], r[7], r[9] === "" ? "-" : money(r[9]), r[10], money(r[11]), money(r[12])];
+  pdf.autoTable({
+    startY: 102, head: [pdfCols], body: rows.map(pick),
+    foot: [["", "", "", "", "", "", "", "", "TOTAL", money(reportTotal())]],
+    styles: { fontSize: 8 }, headStyles: { fillColor: [232, 89, 12] }, footStyles: { fillColor: [255, 241, 230], textColor: 20 },
+    columnStyles: { 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" }, 9: { halign: "right" } },
+  });
+  pdf.save(name + ".pdf");
+}
+
+$("#report-show").addEventListener("click", loadReport);
+$("#report-date").addEventListener("change", loadReport);
+document.querySelectorAll("[data-report]").forEach(b => b.addEventListener("click", async () => {
+  b.disabled = true;
+  try { await downloadReport(b.dataset.report); } catch (err) { toast(err.message, true); }
+  finally { b.disabled = false; }
+}));
 
 // ---------- login ----------
 function lock() {
@@ -635,6 +798,7 @@ function unlock() {
   document.body.classList.remove("locked");
   loadAll();
   loadSales();
+  loadReport();
   renderBill();
 }
 
@@ -897,6 +1061,11 @@ const routes = {
     return { deleted: id };
   },
 
+  async "GET sales-by-date"(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) throw new Error("Pick a date");
+    const snap = await getDocs(query(collection(db, SALES), where("bill_date", ">=", date), where("bill_date", "<=", date + " 99:99")));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.number - b.number);
+  },
   async "GET sales"(id) {
     if (id) {
       const snap = await getDoc(doc(db, SALES, id));
@@ -918,6 +1087,7 @@ const routes = {
       return { product_id: p.id, name: p.name, unit: p.unit, mrp, qty, price, amount: Math.round(qty * price * 100) / 100 };
     });
     const total = Math.round(items.reduce((s, it) => s + it.amount, 0) * 100) / 100;
+    const customer_phone = normalizePhone(b.customer_phone), customer_email = normalizeEmail(b.customer_email);
     let customer = null;
     if (b.customer_id) {
       const snap = await getDoc(doc(db, CUSTOMERS, b.customer_id));
@@ -937,7 +1107,7 @@ const routes = {
       tx.set(saleRef, {
         number, bill_no, bill_date: billDate, created_at: now,
         customer_id: customer?.id || "", customer_address: customer?.address || "", customer_gstin: customer?.gstin || "",
-        customer_name: String(b.customer_name || "").trim(), customer_phone: String(b.customer_phone || "").trim(),
+        customer_name: String(b.customer_name || "").trim(), customer_phone, customer_email,
         items, total,
       });
       return { id: saleRef.id, bill_no, total };
@@ -947,13 +1117,9 @@ const routes = {
 
 function customerData(b) {
   const name = text(b.name, "Customer name");
-  const phone = String(b.phone || "").replace(/[^\d+]/g, "");
-  if (phone && phone.replace(/\D/g, "").length < 10) throw new Error("Enter a 10-digit mobile number");
-  const gstin = String(b.gstin || "").trim().toUpperCase();
-  if (gstin && !/^[0-9]{2}[A-Z0-9]{13}$/.test(gstin)) throw new Error("GST No. should be 15 characters, like 27ACIFM1626L1ZZ");
   return {
-    name, nameKey: name.toLowerCase(), phone, gstin,
-    email: String(b.email || "").trim(), address: String(b.address || "").trim(),
+    name, nameKey: name.toLowerCase(), phone: normalizePhone(b.phone), gstin: normalizeGstin(b.gstin),
+    email: normalizeEmail(b.email), address: String(b.address || "").trim(),
   };
 }
 
