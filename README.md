@@ -6,16 +6,17 @@ There is no server to run.
 
 ## Tabs
 
-- **Product List** – a price list of every Main Category and Sub Category (15 and 76 to start), where you add products and type
+- **Product List** – a price list of every Main Category and Sub Category (21 and 118 to start, including Pharmacy, Vaccine, Physiotherapy Devices, Sporting Equipment, Pet Care and Nutrition Supplements), where you add products and type
   their **MRP** and **S.P.** (S.P. can't exceed MRP). Below it, add, rename or delete categories.
-- **Customer Details** – add, edit and delete customers (name, mobile, email, GST No., address). They can be picked
+- **Customer Details** – add, edit and delete customers. Customer / hospital name and mobile are required; Dr. Name, email, GST No. and address are optional.
+  A name that already exists is refused. Customers can be picked
   on the Sale and Purchase tabs. Mobile: pick the country (IN, UAE, EUROPE, USA, AUSTRALIA, SAUDI) and type
-  digits only; each country's length and starting digits are checked. Email: syntax, throwaway domains (Mailinator,
+  the 10-digit number (a pasted +91 or leading 0 is removed); each country's length and starting digits are checked. Europe takes country code + number. Email: syntax, throwaway domains (Mailinator,
   Yopmail, ...) and the domain's mail server (MX record, looked up with Google DNS-over-HTTPS) are checked, and shared
   role addresses like info@ are flagged. Mailbox-exists (SMTP) and catch-all checks need a server and are not done.
   GST No. is checked for state code, PAN, entity number, the fixed `Z` and the check digit.
-- **1. Sale** – pick a saved customer (or type a walk-in name), browse/search items with prices, add them to a bill, save and print it (the print shows the customer's name, mobile, email, address and GST No.).
-  **Daily Report** lists every bill line for a chosen date and downloads it as Excel (.xlsx), CSV or PDF. Recent bills are listed below.
+- **1. Sale** – type the customer name or pick it from the drop-down; a saved customer fills in mobile, Dr. Name and email (a new name is a walk-in, mobile still required). Then browse/search items with prices, add them to a bill, save and print it (the print shows the customer's name, mobile, email, Dr. Name, address and GST No.).
+  **Generate Report** lists every bill line from one date to another (e.g. 02 Oct 2026 - 12 Oct 2026) and downloads it as Excel (.xlsx), CSV or PDF. Recent Bills below shows only today's bills.
 - **2. Purchase** – choose the customer to purchase from; purchase entry comes next.
 
 ## One-time Firebase setup
@@ -35,7 +36,8 @@ There is no server to run.
 4. **Security rules** – publish `firestore.rules` (paste it into Firestore › Rules, or run
    `firebase deploy --only firestore:rules`).
 
-The first time the Super Admin logs in, the starting categories are added automatically.
+The first time the Super Admin logs in, the starting categories are added automatically. When a new set of starting
+categories is added to the code, it is added once on the next login (`counters/seed` remembers this), so deleted ones don't come back.
 
 ## Open the app
 
@@ -54,6 +56,7 @@ Firebase login does not work from a `file://` page, so open it over http:
 | `mainCategories` | `name`, `nameKey` |
 | `subCategories`  | `mainCategoryId`, `name`, `nameKey` |
 | `products`       | `subCategoryId`, `name`, `nameKey`, `unit`, `mrp`, `sellingPrice` |
-| `customers`      | `name`, `nameKey`, `phone`, `email`, `gstin`, `address` |
-| `sales`          | `number`, `bill_no`, `bill_date`, `customer_id`, `customer_name`, `customer_phone`, `customer_email`, `customer_address`, `customer_gstin`, `items[]`, `total` |
+| `customers`      | `name`, `nameKey`, `phone`, `doctor`, `email`, `gstin`, `address` |
+| `sales`          | `number`, `bill_no`, `bill_date`, `customer_id`, `customer_name`, `customer_phone`, `customer_email`, `customer_doctor`, `customer_address`, `customer_gstin`, `items[]`, `total` |
 | `counters/sales` | `last` (last bill number used) |
+| `counters/seed`  | `version` (how many starting category sets were added) |
