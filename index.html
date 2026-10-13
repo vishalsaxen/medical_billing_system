@@ -192,7 +192,7 @@
         <input type="hidden" name="id">
         <input name="name" placeholder="Customer / hospital name *" required>
         <select name="phone_country" aria-label="Mobile country" style="flex:0 0 140px"></select>
-        <input name="phone" type="tel" inputmode="numeric" placeholder="Mobile (10 digits) *" maxlength="16" required>
+        <input name="phone" type="tel" inputmode="numeric" placeholder="Mobile (10 digits) *" required>
         <input name="doctor" placeholder="Dr. Name (optional)">
         <input name="email" type="email" placeholder="Email (optional)">
         <input name="gstin" placeholder="GST No." maxlength="15" style="text-transform:uppercase">
@@ -234,7 +234,7 @@
           <input name="customer_name" list="customer-names" autocomplete="off" placeholder="Customer / hospital name * (type or pick)" style="flex-basis:100%">
           <datalist id="customer-names"></datalist>
           <select name="customer_phone_country" aria-label="Mobile country" style="flex:0 0 140px"></select>
-          <input name="customer_phone" type="tel" inputmode="numeric" placeholder="Mobile (10 digits) *" maxlength="16">
+          <input name="customer_phone" type="tel" inputmode="numeric" placeholder="Mobile (10 digits) *">
           <input name="customer_doctor" placeholder="Dr. Name (optional)">
           <input name="customer_email" type="email" placeholder="Email (optional)">
         </form>
@@ -703,7 +703,15 @@ for (const [formSel, prefix] of [["#form-customer", ""], ["#bill-customer", "cus
   const email = f.elements[prefix + "email"], gstin = f.elements[prefix + "gstin"];
   country.innerHTML = phoneOptions("IN");
   // Digits only: anything else is dropped as it is typed or pasted.
-  phone.addEventListener("input", () => { phone.value = phone.value.replace(/\D/g, ""); markField(phone, null); });
+  // Digits only, and no more than the country allows (10; Europe 15 with the country code).
+  // A pasted "+91 98765 43210" or "09876543210" is cut down to its 10-digit number first.
+  const fitPhone = () => {
+    const c = PHONE_COUNTRIES[country.value], max = c.code ? 10 : 15;
+    let d = phone.value.replace(/\D/g, "");
+    if (d.length > max) { const n = nationalDigits(d, c); d = (c.trunk && n.length === 9 ? "0" + n : n).slice(0, max); }
+    phone.value = d;
+  };
+  phone.addEventListener("input", () => { fitPhone(); markField(phone, null); });
   // On leaving the field, a valid number is shown in its 10-digit form (a pasted +91 or leading 0 is dropped).
   const checkPhone = () => {
     try {
@@ -713,7 +721,7 @@ for (const [formSel, prefix] of [["#form-customer", ""], ["#bill-customer", "cus
     } catch (e) { markField(phone, e); }
   };
   phone.addEventListener("blur", checkPhone);
-  country.addEventListener("change", () => { if (phone.value) checkPhone(); phone.placeholder = "Mobile: " + PHONE_COUNTRIES[country.value].hint; });
+  country.addEventListener("change", () => { fitPhone(); if (phone.value) checkPhone(); phone.placeholder = "Mobile: " + PHONE_COUNTRIES[country.value].hint; });
   email.addEventListener("input", () => markField(email, null));
   email.addEventListener("blur", async () => {
     try {
